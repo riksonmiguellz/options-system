@@ -635,8 +635,8 @@ with tab4:
         m4.metric("Ativos únicos", df_scan["ativo"].nunique())
 
         # Envio automático ao Telegram
-        tg_token_auto = st.session_state.get("tg_token_salvo", "")
-        tg_chat_auto = st.session_state.get("tg_chat_salvo", "")
+        tg_token_auto = st.session_state.get("tg_token_salvo", "8515652027:AAEEvS1KZ6kZD4W9AxTvPwjrkWGos5LCaOA")
+        tg_chat_auto = st.session_state.get("tg_chat_salvo", "7209540971")
         if tg_token_auto and tg_chat_auto:
             from telegram_bot import gerar_relatorio_scanner
             with st.spinner("Enviando relatório ao Telegram..."):
@@ -822,10 +822,10 @@ with tab6:
     """)
 
     tg_token = st.text_input("Token do bot", type="password", key="tg_token",
-                             value=st.session_state.get("tg_token_salvo", ""))
+                             value=st.session_state.get("tg_token_salvo", "8515652027:AAEEvS1KZ6kZD4W9AxTvPwjrkWGos5LCaOA"))
     tg_chat_id = st.text_input("Chat ID", key="tg_chat_id",
-                               value=st.session_state.get("tg_chat_salvo", ""))
-    tg_tickers = st.text_input("Ativos para monitorar (separar por vírgula)", placeholder="PETR4, VALE3, BBAS3", key="tg_tickers")
+                               value=st.session_state.get("tg_chat_salvo", "7209540971"))
+    tg_tickers = st.text_input("Ativos para monitorar (separar por vírgula, vazio = TODOS)", placeholder="Vazio = todos os ativos", key="tg_tickers")
 
     if st.button("Salvar configurações do Telegram", key="btn_tg_salvar"):
         st.session_state["tg_token_salvo"] = tg_token

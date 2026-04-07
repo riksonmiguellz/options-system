@@ -16,8 +16,8 @@ from datetime import datetime
 from scanner import escanear_mercado, selecionar_backtest
 from backtest import gerar_relatorio_backtest, atualizar_backtest
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8515652027:AAEEvS1KZ6kZD4W9AxTvPwjrkWGos5LCaOA")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "7209540971")
 
 
 def enviar_mensagem(texto: str, chat_id: str = None, token: str = None) -> bool:
