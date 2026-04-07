@@ -1,11 +1,12 @@
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, date
 import csv
 import os
 import math
 import pandas as pd
 import altair as alt
 from io import BytesIO
+import requests
 
 st.set_page_config(page_title="Sistema de Análise de Opções", layout="wide")
 
@@ -253,6 +254,40 @@ def invalidacao() -> str:
     return "A tese enfraquece se o ativo não evoluir, a liquidez piorar, o tempo apertar demais ou a premissa central falhar."
 
 # -----------------------------
+# OPLAB API
+# -----------------------------
+OPLAB_TOKEN = "igLO7xOgvGN5C1bWhzmP7mGaIVh6lkddO7MdfP2WGQ2rcSg3uZsEJW012KXqAz5f--6nuuFsZFm9PUpBIqwMX0uQ==--ZDcwMThkZjIwYjI5NTA4ZmNhZTY2NGIxMTJhODE0Njg="
+OPLAB_BASE = "https://api.oplab.com.br/v3"
+OPLAB_HEADERS = {"Access-Token": OPLAB_TOKEN}
+
+@st.cache_data(ttl=300)
+def oplab_buscar_ativo(ticker: str):
+    try:
+        r = requests.get(f"{OPLAB_BASE}/market/stocks/{ticker.upper()}", headers=OPLAB_HEADERS, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+@st.cache_data(ttl=300)
+def oplab_buscar_opcoes(ticker: str):
+    try:
+        r = requests.get(f"{OPLAB_BASE}/market/options/{ticker.upper()}", headers=OPLAB_HEADERS, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+def classificar_liquidez_volume(volume: int) -> str:
+    if volume >= 50000:
+        return "Alta"
+    if volume >= 5000:
+        return "Média"
+    return "Baixa"
+
+# -----------------------------
 # PAYOFF E MÉTRICAS
 # -----------------------------
 def gerar_payoff(tipo: str, strike: float, premio: float, spot_ref: float, contratos: int, lote: int):
@@ -315,28 +350,102 @@ with st.sidebar:
         st.session_state["usuario"] = ""
         st.rerun()
 
-tab1, tab2 = st.tabs(["Nova análise", "Histórico"])
+tab1, tab2, tab3 = st.tabs(["Nova análise", "Histórico", "Opções ao vivo"])
 
 with tab1:
     st.title("Sistema de Análise de Opções")
-    st.caption("Leitura prática, linguagem simples e análise visual")
+    st.caption("Leitura prática, linguagem simples e análise visual — dados ao vivo via OpLab")
+
+    st.subheader("Buscar dados ao vivo")
+    busca_col1, busca_col2 = st.columns([1, 3])
+    with busca_col1:
+        ativo = st.text_input("Ativo", placeholder="Ex: PETR4")
+    with busca_col2:
+        st.write("")
+        st.write("")
+        buscar = st.button("Buscar na OpLab")
+
+    dados_ativo = None
+    opcoes_lista = []
+    opcao_selecionada = None
+
+    if buscar and ativo:
+        dados_ativo = oplab_buscar_ativo(ativo)
+        if dados_ativo:
+            st.session_state["oplab_ativo"] = dados_ativo
+            opcoes_raw = oplab_buscar_opcoes(ativo)
+            if opcoes_raw:
+                st.session_state["oplab_opcoes"] = opcoes_raw
+            else:
+                st.session_state["oplab_opcoes"] = []
+            st.success(f"{ativo.upper()} encontrado — preço atual: R$ {dados_ativo['close']:.2f} | Vol. implícita: {dados_ativo.get('iv_current', 0):.2f}%")
+        else:
+            st.error(f"Ativo '{ativo}' não encontrado na OpLab.")
+            st.session_state["oplab_ativo"] = None
+            st.session_state["oplab_opcoes"] = []
+
+    dados_ativo = st.session_state.get("oplab_ativo")
+    opcoes_raw = st.session_state.get("oplab_opcoes", [])
+
+    if opcoes_raw:
+        hoje = date.today()
+        opcoes_filtradas = [
+            o for o in opcoes_raw
+            if o.get("days_to_maturity", 0) > 0 and (o.get("bid", 0) > 0 or o.get("ask", 0) > 0)
+        ]
+        opcoes_filtradas.sort(key=lambda o: (o.get("category", ""), o.get("due_date", ""), o.get("strike", 0)))
+
+        nomes_opcoes = [
+            f"{o['category']} | Strike {o['strike']:.2f} | Venc. {o['due_date']} | {o['days_to_maturity']}d | Bid {o.get('bid',0):.2f} Ask {o.get('ask',0):.2f} | Vol {o.get('volume',0)}"
+            for o in opcoes_filtradas
+        ]
+
+        if nomes_opcoes:
+            idx_escolha = st.selectbox("Selecionar opção", range(len(nomes_opcoes)), format_func=lambda i: nomes_opcoes[i])
+            opcao_selecionada = opcoes_filtradas[idx_escolha]
+
+    st.divider()
+
+    default_tipo = 0
+    default_spot = 0.0
+    default_strike = 0.0
+    default_dias = 1
+    default_vol = 30.0
+    default_preco = 0.0
+    default_lote = 100
+    default_liquidez = 0
+
+    if opcao_selecionada:
+        default_tipo = 0 if opcao_selecionada["category"] == "CALL" else 1
+        default_spot = float(opcao_selecionada.get("spot_price", 0) or (dados_ativo["close"] if dados_ativo else 0))
+        default_strike = float(opcao_selecionada.get("strike", 0))
+        default_dias = int(opcao_selecionada.get("days_to_maturity", 1))
+        default_preco = float(opcao_selecionada.get("ask", 0) or opcao_selecionada.get("close", 0))
+        default_lote = int(opcao_selecionada.get("contract_size", 100))
+        vol_do_ativo = float(dados_ativo.get("iv_current", 30)) if dados_ativo else 30.0
+        default_vol = vol_do_ativo
+        vol_opcao = opcao_selecionada.get("volume", 0)
+        liq_label = classificar_liquidez_volume(vol_opcao)
+        default_liquidez = ["Baixa", "Média", "Alta"].index(liq_label)
+    elif dados_ativo:
+        default_spot = float(dados_ativo.get("close", 0))
+        default_vol = float(dados_ativo.get("iv_current", 30))
 
     col1, col2 = st.columns(2)
 
     with col1:
-        ativo = st.text_input("Ativo", placeholder="Ex: PETR4")
-        tipo = st.selectbox("Tipo da opção", ["Call", "Put"])
+        tipo = st.selectbox("Tipo da opção", ["Call", "Put"], index=default_tipo)
         quantidade_contratos = st.number_input("Quantidade de contratos", min_value=1, step=1, value=1)
-        lote_por_contrato = st.number_input("Lote por contrato", min_value=1, step=1, value=100)
-        spot = st.number_input("Preço atual do ativo", min_value=0.0, format="%.2f")
-        strike = st.number_input("Strike", min_value=0.0, format="%.2f")
-        dias_vencimento = st.number_input("Dias até o vencimento", min_value=1, step=1)
-        vol_implicita_pct = st.number_input("Volatilidade implícita (%)", min_value=0.0, format="%.2f", value=30.00)
+        lote_por_contrato = st.number_input("Lote por contrato", min_value=1, step=1, value=default_lote)
+        spot = st.number_input("Preço atual do ativo", min_value=0.0, format="%.2f", value=default_spot)
+        strike = st.number_input("Strike", min_value=0.0, format="%.2f", value=default_strike)
+        dias_vencimento = st.number_input("Dias até o vencimento", min_value=1, step=1, value=default_dias)
+        vol_implicita_pct = st.number_input("Volatilidade implícita (%)", min_value=0.0, format="%.2f", value=default_vol)
         taxa_risco_pct = st.number_input("Taxa livre de risco (%)", min_value=0.0, format="%.2f", value=10.50)
-        preco_pago = st.number_input("Preço pago por opção", min_value=0.0, format="%.2f")
+        preco_pago = st.number_input("Preço pago por opção", min_value=0.0, format="%.2f", value=default_preco)
 
     with col2:
-        liquidez = st.selectbox("Liquidez", ["Baixa", "Média", "Alta"])
+        liquidez = st.selectbox("Liquidez", ["Baixa", "Média", "Alta"], index=default_liquidez)
         tese = st.text_area(
             "Tese / observações",
             height=160,
@@ -786,3 +895,85 @@ with tab2:
                 st.success("Registro atualizado com sucesso. Recarregue a página para ver os dados atualizados.")
         else:
             st.info("Nenhum registro disponível para edição com os filtros atuais.")
+
+with tab3:
+    st.title("Opções ao vivo — OpLab")
+    st.caption("Consulte todas as opções disponíveis para qualquer ativo da B3 em tempo real")
+
+    ticker_vivo = st.text_input("Digite o ticker", placeholder="Ex: PETR4, VALE3, BBAS3", key="ticker_vivo")
+    buscar_vivo = st.button("Buscar opções", key="btn_vivo")
+
+    if buscar_vivo and ticker_vivo:
+        with st.spinner("Buscando dados na OpLab..."):
+            info_ativo = oplab_buscar_ativo(ticker_vivo)
+            opcoes_vivo = oplab_buscar_opcoes(ticker_vivo)
+
+        if info_ativo:
+            st.subheader(f"{ticker_vivo.upper()} — Dados do ativo")
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Preço atual", f"R$ {info_ativo['close']:.2f}")
+            m2.metric("Variação", f"{info_ativo.get('variation', 0):.2f}%")
+            m3.metric("Vol. implícita", f"{info_ativo.get('iv_current', 0):.2f}%")
+            m4.metric("Volume", f"{info_ativo.get('volume', 0):,}")
+            m5.metric("Setor", info_ativo.get("sector", "-"))
+
+            if opcoes_vivo:
+                opcoes_validas = [
+                    o for o in opcoes_vivo
+                    if o.get("days_to_maturity", 0) > 0
+                ]
+
+                if opcoes_validas:
+                    df_opcoes = pd.DataFrame([
+                        {
+                            "Símbolo": o["symbol"],
+                            "Tipo": o.get("category", o.get("type", "")),
+                            "Strike": o.get("strike", 0),
+                            "Vencimento": o.get("due_date", ""),
+                            "Dias": o.get("days_to_maturity", 0),
+                            "Bid": o.get("bid", 0),
+                            "Ask": o.get("ask", 0),
+                            "Último": o.get("close", 0),
+                            "Volume": o.get("volume", 0),
+                            "Liquidez": classificar_liquidez_volume(o.get("volume", 0)),
+                        }
+                        for o in opcoes_validas
+                    ])
+
+                    st.subheader("Filtros")
+                    fc1, fc2 = st.columns(2)
+                    with fc1:
+                        filtro_tipo = st.selectbox("Tipo", ["Todos", "CALL", "PUT"], key="filtro_tipo_vivo")
+                    with fc2:
+                        vencimentos = ["Todos"] + sorted(df_opcoes["Vencimento"].unique().tolist())
+                        filtro_venc = st.selectbox("Vencimento", vencimentos, key="filtro_venc_vivo")
+
+                    df_exibir = df_opcoes.copy()
+                    if filtro_tipo != "Todos":
+                        df_exibir = df_exibir[df_exibir["Tipo"] == filtro_tipo]
+                    if filtro_venc != "Todos":
+                        df_exibir = df_exibir[df_exibir["Vencimento"] == filtro_venc]
+
+                    st.subheader(f"{len(df_exibir)} opções encontradas")
+                    st.dataframe(
+                        df_exibir.sort_values(["Tipo", "Vencimento", "Strike"]).reset_index(drop=True),
+                        use_container_width=True
+                    )
+
+                    st.subheader("Distribuição de strikes")
+                    for tipo_graf in ["CALL", "PUT"]:
+                        df_tipo = df_exibir[df_exibir["Tipo"] == tipo_graf]
+                        if not df_tipo.empty:
+                            graf = alt.Chart(df_tipo).mark_bar().encode(
+                                x=alt.X("Strike:Q", title="Strike"),
+                                y=alt.Y("Volume:Q", title="Volume"),
+                                color=alt.value("#16a34a" if tipo_graf == "CALL" else "#dc2626"),
+                                tooltip=["Símbolo", "Strike", "Volume", "Bid", "Ask", "Dias"]
+                            ).properties(height=280, title=f"{tipo_graf}s — Volume por strike")
+                            st.altair_chart(graf, use_container_width=True)
+                else:
+                    st.warning("Nenhuma opção ativa encontrada para este ativo.")
+            else:
+                st.warning("Não foi possível carregar as opções.")
+        else:
+            st.error(f"Ativo '{ticker_vivo}' não encontrado na OpLab.")
