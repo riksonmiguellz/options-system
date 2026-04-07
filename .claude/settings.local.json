@@ -7,7 +7,10 @@
       "Bash(gh --version)",
       "Bash(gh repo:*)",
       "Bash(start:*)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\" \"https://riksonmiguellz-options-system.streamlit.app\")"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" \"https://riksonmiguellz-options-system.streamlit.app\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" -L \"https://riksonmiguellz-options-system.streamlit.app\")",
+      "Bash(curl -s -L --max-redirs 5 \"https://riksonmiguellz-options-system.streamlit.app\")",
+      "Bash(curl -v -L \"https://riksonmiguellz-options-system.streamlit.app/_stcore/health\")"
     ]
   }
 }

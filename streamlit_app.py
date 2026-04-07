@@ -12,34 +12,22 @@ st.set_page_config(page_title="Sistema de Análise de Opções", layout="wide")
 # -----------------------------
 # AUTENTICAÇÃO
 # -----------------------------
-def obter_credenciais():
-    try:
-        user = st.secrets["APP_USER"]
-        pwd = st.secrets["APP_PASS"]
-    except Exception:
-        user = os.environ.get("APP_USER", "admin")
-        pwd = os.environ.get("APP_PASS", "admin123")
-    return {user: pwd}
-
-USUARIOS = obter_credenciais()
+APP_USER = "admin"
+APP_PASS = "admin123"
 
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
-
-def fazer_login():
-    st.session_state["autenticado"] = True
-    st.session_state["usuario"] = st.session_state["_login_user"]
+if "usuario" not in st.session_state:
+    st.session_state["usuario"] = ""
 
 if not st.session_state["autenticado"]:
     st.title("Login")
-    usuario = st.text_input("Usuário", key="_login_user")
-    senha = st.text_input("Senha", type="password", key="_login_pass")
+    usuario = st.text_input("Usuário")
+    senha = st.text_input("Senha", type="password")
     if st.button("Entrar"):
-        u = st.session_state["_login_user"]
-        s = st.session_state["_login_pass"]
-        if u in USUARIOS and USUARIOS[u] == s:
+        if usuario == APP_USER and senha == APP_PASS:
             st.session_state["autenticado"] = True
-            st.session_state["usuario"] = u
+            st.session_state["usuario"] = usuario
             st.rerun()
         else:
             st.error("Usuário ou senha incorretos.")
