@@ -7,11 +7,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-EXPOSE 8501
+EXPOSE 10000
 
 ENV APP_USER=admin
 ENV APP_PASS=admin123
 
-HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health || exit 1
-
-ENTRYPOINT ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+ENTRYPOINT ["streamlit", "run", "streamlit_app.py", "--server.port=10000", "--server.address=0.0.0.0", "--server.headless=true", "--server.enableCORS=false", "--server.enableXsrfProtection=false"]
