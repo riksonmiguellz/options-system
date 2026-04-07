@@ -1,0 +1,18 @@
+
+## Tese
+vale3
+
+
+## Score (simulado)
+Prazo: 4
+Desconto: 5
+Liquidez: 2
+Probabilidade: 3
+Ativo: 3
+Assimetria: 4
+
+## Decisão
+Observar / Entrada pequena
+
+## Data
+2026-04-06 23:58:35.102826

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh auth:*)",
+      "Bash(winget install:*)",
+      "Bash(export PATH=\"$PATH:/c/Program Files/GitHub CLI\")",
+      "Bash(gh --version)",
+      "Bash(gh repo:*)",
+      "Bash(start:*)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" \"https://riksonmiguellz-options-system.streamlit.app\")"
+    ]
+  }
+}

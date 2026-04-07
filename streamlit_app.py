@@ -26,19 +26,23 @@ USUARIOS = obter_credenciais()
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
 
+def fazer_login():
+    st.session_state["autenticado"] = True
+    st.session_state["usuario"] = st.session_state["_login_user"]
+
 if not st.session_state["autenticado"]:
     st.title("Login")
-    with st.form("login_form"):
-        usuario = st.text_input("Usuário")
-        senha = st.text_input("Senha", type="password")
-        enviou = st.form_submit_button("Entrar")
-        if enviou:
-            if usuario in USUARIOS and USUARIOS[usuario] == senha:
-                st.session_state["autenticado"] = True
-                st.session_state["usuario"] = usuario
-                st.rerun()
-            else:
-                st.error("Usuário ou senha incorretos.")
+    usuario = st.text_input("Usuário", key="_login_user")
+    senha = st.text_input("Senha", type="password", key="_login_pass")
+    if st.button("Entrar"):
+        u = st.session_state["_login_user"]
+        s = st.session_state["_login_pass"]
+        if u in USUARIOS and USUARIOS[u] == s:
+            st.session_state["autenticado"] = True
+            st.session_state["usuario"] = u
+            st.rerun()
+        else:
+            st.error("Usuário ou senha incorretos.")
     st.stop()
 
 CSV_FILE = "trades_log.csv"
