@@ -3,7 +3,8 @@ Modelos de precificação de opções:
 1. Black-Scholes
 2. Binomial (Cox-Ross-Rubinstein)
 3. Monte Carlo
-4. Put-Call Parity (verificação de arbitragem)
+4. Heston (volatilidade estocástica)
+5. Put-Call Parity (verificação de arbitragem)
 """
 
 import math
@@ -85,7 +86,57 @@ def monte_carlo(tipo: str, S: float, K: float, T: float, r: float, sigma: float,
     return max(0.0, round(preco, 4))
 
 # -----------------------------------------------
-# 4. PUT-CALL PARITY (verificação)
+# 4. HESTON (volatilidade estocástica)
+# -----------------------------------------------
+def heston_mc(tipo: str, S: float, K: float, T: float, r: float, sigma: float,
+              kappa: float = 2.0, theta: float = None, xi: float = 0.3, rho: float = -0.7,
+              simulacoes: int = 30000, passos: int = 100) -> float:
+    """
+    Modelo de Heston via Monte Carlo.
+    - kappa: velocidade de reversão à média da variância
+    - theta: variância de longo prazo (default = sigma²)
+    - xi (vol of vol): volatilidade da variância
+    - rho: correlação entre ativo e variância
+    """
+    if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
+        if tipo.lower() == "call":
+            return max(0.0, S - K)
+        return max(0.0, K - S)
+
+    if theta is None:
+        theta = sigma ** 2
+
+    v0 = sigma ** 2
+    dt = T / passos
+
+    random.seed(42)
+    soma_payoff = 0.0
+
+    for _ in range(simulacoes):
+        s_t = S
+        v_t = v0
+
+        for _ in range(passos):
+            z1 = random.gauss(0, 1)
+            z2 = rho * z1 + math.sqrt(1 - rho ** 2) * random.gauss(0, 1)
+
+            v_t = max(v_t, 0.0001)
+            s_t = s_t * math.exp((r - 0.5 * v_t) * dt + math.sqrt(v_t * dt) * z1)
+            v_t = v_t + kappa * (theta - v_t) * dt + xi * math.sqrt(v_t * dt) * z2
+            v_t = max(v_t, 0.0)
+
+        if tipo.lower() == "call":
+            payoff = max(0.0, s_t - K)
+        else:
+            payoff = max(0.0, K - s_t)
+
+        soma_payoff += payoff
+
+    preco = math.exp(-r * T) * (soma_payoff / simulacoes)
+    return max(0.0, round(preco, 4))
+
+# -----------------------------------------------
+# 5. PUT-CALL PARITY (verificação)
 # -----------------------------------------------
 def put_call_parity_call(put_price: float, S: float, K: float, T: float, r: float) -> float:
     """Dado o preço da PUT, calcula o preço teórico da CALL via paridade."""
@@ -108,13 +159,15 @@ def comparar_modelos(tipo: str, S: float, K: float, T: float, r: float, sigma: f
     bs = black_scholes(tipo, S, K, T, r, sigma)
     binom = binomial_crr(tipo, S, K, T, r, sigma)
     mc = monte_carlo(tipo, S, K, T, r, sigma)
+    heston = heston_mc(tipo, S, K, T, r, sigma)
 
-    media = round((bs + binom + mc) / 3, 4)
+    media = round((bs + binom + mc + heston) / 4, 4)
 
     return {
         "black_scholes": bs,
         "binomial": binom,
         "monte_carlo": mc,
+        "heston": heston,
         "media_modelos": media,
     }
 

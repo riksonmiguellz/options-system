@@ -41,6 +41,7 @@ def escanear_ativo(ticker: str, dados_ativo: dict, dias_min: int = 180, liquidez
         distorcao_bs = calcular_distorcao(preco_mkt, modelos["black_scholes"])
         distorcao_binom = calcular_distorcao(preco_mkt, modelos["binomial"])
         distorcao_mc = calcular_distorcao(preco_mkt, modelos["monte_carlo"])
+        distorcao_heston = calcular_distorcao(preco_mkt, modelos["heston"])
         distorcao_media = calcular_distorcao(preco_mkt, modelos["media_modelos"])
 
         resultados.append({
@@ -65,10 +66,12 @@ def escanear_ativo(ticker: str, dados_ativo: dict, dias_min: int = 180, liquidez
             "bs_preco": modelos["black_scholes"],
             "binomial_preco": modelos["binomial"],
             "monte_carlo_preco": modelos["monte_carlo"],
+            "heston_preco": modelos["heston"],
             "media_modelos": modelos["media_modelos"],
             "distorcao_bs_pct": distorcao_bs,
             "distorcao_binomial_pct": distorcao_binom,
             "distorcao_mc_pct": distorcao_mc,
+            "distorcao_heston_pct": distorcao_heston,
             "distorcao_media_pct": distorcao_media,
             "iv_ativo_pct": iv * 100,
             "setor": dados_ativo.get("sector", ""),

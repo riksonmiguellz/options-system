@@ -103,6 +103,9 @@ def atualizar_backtest() -> pd.DataFrame:
         if item["preco_entrada"] > 0:
             variacao_preco = round(((preco_atual - item["preco_entrada"]) / item["preco_entrada"]) * 100, 2)
 
+        pnl_unitario = preco_atual - item["preco_entrada"]
+        pnl_zona = "LUCRO" if pnl_unitario >= 0 else "PREJUÍZO"
+
         registro = {
             "data": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "simbolo": item["simbolo"],
@@ -114,10 +117,13 @@ def atualizar_backtest() -> pd.DataFrame:
             "spot_atual": spot,
             "preco_entrada": item["preco_entrada"],
             "preco_atual": preco_atual,
+            "pnl_unitario": round(pnl_unitario, 4),
+            "zona": pnl_zona,
             "variacao_pct": variacao_preco,
             "bs_preco": modelos["black_scholes"],
             "binomial_preco": modelos["binomial"],
             "mc_preco": modelos["monte_carlo"],
+            "heston_preco": modelos["heston"],
             "media_modelos": modelos["media_modelos"],
             "distorcao_atual_pct": round(((modelos["media_modelos"] - preco_atual) / modelos["media_modelos"]) * 100, 2) if modelos["media_modelos"] > 0 else 0,
             "distorcao_entrada_pct": item["distorcao_entrada"],
@@ -164,12 +170,14 @@ def gerar_relatorio_backtest() -> str:
         emoji = "🟢" if row["variacao_pct"] >= 0 else "🔴"
         dist_emoji = "✅" if row["distorcao_atual_pct"] > 0 else "⚠️"
 
-        linhas.append(f"{emoji} *{row['simbolo']}* ({row['ativo']})")
+        zona_emoji = "💰" if row.get("zona") == "LUCRO" else "💸"
+        linhas.append(f"{emoji} *{row['simbolo']}* ({row['ativo']}) {zona_emoji} {row.get('zona', '')}")
         linhas.append(f"  Tipo: {row['tipo']} | Strike: {row['strike']:.2f}")
         linhas.append(f"  Venc: {row['vencimento']} ({row['dias_restantes']}d)")
         linhas.append(f"  Entrada: R$ {row['preco_entrada']:.2f} → Atual: R$ {row['preco_atual']:.2f} ({row['variacao_pct']:+.2f}%)")
+        linhas.append(f"  P&L unitário: R$ {row.get('pnl_unitario', 0):+.4f}")
         linhas.append(f"  {dist_emoji} Distorção: {row['distorcao_atual_pct']:.2f}% (entrada: {row['distorcao_entrada_pct']:.2f}%)")
-        linhas.append(f"  BS: {row['bs_preco']:.4f} | Binom: {row['binomial_preco']:.4f} | MC: {row['mc_preco']:.4f}")
+        linhas.append(f"  BS: {row['bs_preco']:.4f} | Binom: {row['binomial_preco']:.4f} | MC: {row['mc_preco']:.4f} | Heston: {row.get('heston_preco', 0):.4f}")
         linhas.append("")
 
     ganhadoras = len(df[df["variacao_pct"] > 0])

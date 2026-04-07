@@ -73,7 +73,8 @@ def gerar_relatorio_scanner(tickers: list = None, dias_min: int = 180, top: int 
         linhas.append(f"  {row['tipo']} | Strike {row['strike']:.2f} | Spot {row['spot']:.2f}")
         linhas.append(f"  Venc: {row['vencimento']} ({row['dias_vencimento']}d)")
         linhas.append(f"  Preço mkt: R$ {row['preco_mercado']:.2f}")
-        linhas.append(f"  BS: {row['bs_preco']:.4f} | Binom: {row['binomial_preco']:.4f} | MC: {row['monte_carlo_preco']:.4f}")
+        linhas.append(f"  BS: {row['bs_preco']:.4f} | Binom: {row['binomial_preco']:.4f}")
+        linhas.append(f"  MC: {row['monte_carlo_preco']:.4f} | Heston: {row.get('heston_preco', 0):.4f}")
         linhas.append(f"  📐 Distorção média: {row['distorcao_media_pct']:.2f}%")
         linhas.append("")
 

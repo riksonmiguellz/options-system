@@ -319,31 +319,33 @@ with tab1:
         c3.metric("Nota média", f"{media}/5")
         c4.metric("Decisão", decisao)
 
-        # 4 MODELOS
+        # 4 MODELOS + HESTON
         st.subheader("Comparação entre modelos de precificação")
-        mod_col1, mod_col2, mod_col3, mod_col4 = st.columns(4)
+        mod_col1, mod_col2, mod_col3, mod_col4, mod_col5 = st.columns(5)
         mod_col1.metric("Black-Scholes", f"{modelos['black_scholes']:.4f}")
         mod_col2.metric("Binomial (CRR)", f"{modelos['binomial']:.4f}")
         mod_col3.metric("Monte Carlo", f"{modelos['monte_carlo']:.4f}")
-        mod_col4.metric("Média dos modelos", f"{modelos['media_modelos']:.4f}")
+        mod_col4.metric("Heston", f"{modelos['heston']:.4f}")
+        mod_col5.metric("Média (4 modelos)", f"{modelos['media_modelos']:.4f}")
 
         dist_bs = calcular_distorcao(preco_pago, modelos["black_scholes"])
         dist_bin = calcular_distorcao(preco_pago, modelos["binomial"])
         dist_mc = calcular_distorcao(preco_pago, modelos["monte_carlo"])
+        dist_heston = calcular_distorcao(preco_pago, modelos["heston"])
         dist_media = calcular_distorcao(preco_pago, modelos["media_modelos"])
 
         comp_df = pd.DataFrame({
-            "Modelo": ["Preço pago", "Black-Scholes", "Binomial", "Monte Carlo", "Média"],
-            "Valor": [preco_pago, modelos["black_scholes"], modelos["binomial"], modelos["monte_carlo"], modelos["media_modelos"]],
-            "Distorção (%)": [0, dist_bs, dist_bin, dist_mc, dist_media]
+            "Modelo": ["Preço pago", "Black-Scholes", "Binomial", "Monte Carlo", "Heston", "Média"],
+            "Valor": [preco_pago, modelos["black_scholes"], modelos["binomial"], modelos["monte_carlo"], modelos["heston"], modelos["media_modelos"]],
+            "Distorção (%)": [0, dist_bs, dist_bin, dist_mc, dist_heston, dist_media]
         })
 
-        graf_modelos = alt.Chart(comp_df).mark_bar(size=50).encode(
-            x=alt.X("Modelo:N", sort=["Preço pago", "Black-Scholes", "Binomial", "Monte Carlo", "Média"]),
+        graf_modelos = alt.Chart(comp_df).mark_bar(size=45).encode(
+            x=alt.X("Modelo:N", sort=["Preço pago", "Black-Scholes", "Binomial", "Monte Carlo", "Heston", "Média"]),
             y=alt.Y("Valor:Q"),
             color=alt.Color("Modelo:N", scale=alt.Scale(
-                domain=["Preço pago", "Black-Scholes", "Binomial", "Monte Carlo", "Média"],
-                range=["#dc2626", "#16a34a", "#2563eb", "#9333ea", "#f59e0b"]
+                domain=["Preço pago", "Black-Scholes", "Binomial", "Monte Carlo", "Heston", "Média"],
+                range=["#dc2626", "#16a34a", "#2563eb", "#9333ea", "#0ea5e9", "#f59e0b"]
             ), legend=None),
             tooltip=["Modelo", alt.Tooltip("Valor:Q", format=".4f"), alt.Tooltip("Distorção (%):Q", format=".2f")]
         ).properties(height=320)
@@ -632,12 +634,27 @@ with tab4:
         m3.metric("Maior distorção", f"{df_scan['distorcao_media_pct'].max():.2f}%")
         m4.metric("Ativos únicos", df_scan["ativo"].nunique())
 
+        # Envio automático ao Telegram
+        tg_token_auto = st.session_state.get("tg_token_salvo", "")
+        tg_chat_auto = st.session_state.get("tg_chat_salvo", "")
+        if tg_token_auto and tg_chat_auto:
+            from telegram_bot import gerar_relatorio_scanner
+            with st.spinner("Enviando relatório ao Telegram..."):
+                relatorio_tg = gerar_relatorio_scanner(tickers=tickers_list, dias_min=scan_dias_min, top=min(scan_top, 20))
+                ok_tg = enviar_mensagem(relatorio_tg, chat_id=tg_chat_auto, token=tg_token_auto)
+            if ok_tg:
+                st.success("Relatório enviado ao Telegram automaticamente!")
+            else:
+                st.warning("Não foi possível enviar ao Telegram. Verifique as configurações na aba Telegram.")
+        else:
+            st.info("Configure o Telegram na aba 'Telegram' para envio automático dos relatórios.")
+
         # Tabela principal
         colunas_exibir = [
             "ativo", "simbolo", "tipo", "strike", "spot", "vencimento", "dias_vencimento",
             "preco_mercado", "bid", "ask", "volume", "volume_financeiro",
-            "bs_preco", "binomial_preco", "monte_carlo_preco", "media_modelos",
-            "distorcao_bs_pct", "distorcao_binomial_pct", "distorcao_mc_pct", "distorcao_media_pct",
+            "bs_preco", "binomial_preco", "monte_carlo_preco", "heston_preco", "media_modelos",
+            "distorcao_bs_pct", "distorcao_binomial_pct", "distorcao_mc_pct", "distorcao_heston_pct", "distorcao_media_pct",
             "iv_ativo_pct", "tipo_exercicio", "market_maker", "setor"
         ]
         colunas_disponiveis = [c for c in colunas_exibir if c in df_scan.columns]
@@ -695,16 +712,83 @@ with tab5:
             st.subheader("Histórico de acompanhamento")
             st.dataframe(df_hist.tail(50), use_container_width=True)
 
-            # Gráfico de variação
             df_hist["variacao_pct"] = pd.to_numeric(df_hist["variacao_pct"], errors="coerce")
+            df_hist["preco_atual"] = pd.to_numeric(df_hist["preco_atual"], errors="coerce")
+            df_hist["preco_entrada"] = pd.to_numeric(df_hist["preco_entrada"], errors="coerce")
+            df_hist["pnl_unitario"] = pd.to_numeric(df_hist.get("pnl_unitario", 0), errors="coerce")
+
             if "data" in df_hist.columns:
-                graf_var = alt.Chart(df_hist).mark_line(point=True).encode(
+                # Gráfico 1: Evolução do preço de cada opção desde a indicação
+                st.subheader("Evolução do preço das opções (desde a indicação)")
+
+                simbolos_unicos = df_hist["simbolo"].unique().tolist()
+                simb_selecionado = st.selectbox("Selecionar opção para detalhe", ["Todas"] + simbolos_unicos, key="sel_evolucao")
+
+                df_graf = df_hist.copy()
+                if simb_selecionado != "Todas":
+                    df_graf = df_graf[df_graf["simbolo"] == simb_selecionado]
+
+                # Linha do preço atual
+                linha_preco = alt.Chart(df_graf).mark_line(point=True, strokeWidth=2).encode(
+                    x=alt.X("data:N", title="Data"),
+                    y=alt.Y("preco_atual:Q", title="Preço da opção (R$)"),
+                    color="simbolo:N",
+                    tooltip=["simbolo", "ativo", "data:N",
+                             alt.Tooltip("preco_atual:Q", title="Preço atual", format=".4f"),
+                             alt.Tooltip("preco_entrada:Q", title="Preço entrada", format=".4f"),
+                             alt.Tooltip("variacao_pct:Q", title="Variação %", format=".2f")]
+                )
+
+                # Linha do preço de entrada (referência)
+                if simb_selecionado != "Todas" and not df_graf.empty:
+                    preco_ref = df_graf["preco_entrada"].iloc[0]
+                    linha_entrada = alt.Chart(pd.DataFrame({"y": [preco_ref]})).mark_rule(
+                        color="#f59e0b", strokeDash=[6, 4], strokeWidth=2
+                    ).encode(y="y:Q")
+
+                    texto_entrada = alt.Chart(pd.DataFrame({"y": [preco_ref], "label": [f"Entrada: R$ {preco_ref:.4f}"]})).mark_text(
+                        align="left", dx=5, dy=-10, color="#f59e0b", fontSize=12
+                    ).encode(y="y:Q", text="label:N")
+
+                    chart_evolucao = (linha_preco + linha_entrada + texto_entrada).properties(height=400)
+                else:
+                    chart_evolucao = linha_preco.properties(height=400)
+
+                st.altair_chart(chart_evolucao, use_container_width=True)
+
+                # Gráfico 2: Zona de lucro/prejuízo por opção
+                st.subheader("Zona de lucro / prejuízo por opção")
+
+                df_ultimo = df_hist.sort_values("data").groupby("simbolo").last().reset_index()
+                df_ultimo["pnl_calc"] = df_ultimo["preco_atual"] - df_ultimo["preco_entrada"]
+                df_ultimo["zona"] = df_ultimo["pnl_calc"].apply(lambda x: "LUCRO" if x >= 0 else "PREJUÍZO")
+
+                graf_zona = alt.Chart(df_ultimo).mark_bar().encode(
+                    x=alt.X("pnl_calc:Q", title="P&L unitário (R$)"),
+                    y=alt.Y("simbolo:N", sort="-x", title=""),
+                    color=alt.Color("zona:N", scale=alt.Scale(
+                        domain=["LUCRO", "PREJUÍZO"], range=["#16a34a", "#dc2626"]
+                    )),
+                    tooltip=["simbolo", "ativo",
+                             alt.Tooltip("preco_entrada:Q", title="Entrada", format=".4f"),
+                             alt.Tooltip("preco_atual:Q", title="Atual", format=".4f"),
+                             alt.Tooltip("pnl_calc:Q", title="P&L", format=".4f"),
+                             alt.Tooltip("variacao_pct:Q", title="Var %", format=".2f")]
+                ).properties(height=max(200, len(df_ultimo) * 30))
+                st.altair_chart(graf_zona, use_container_width=True)
+
+                # Gráfico 3: Variação % ao longo do tempo
+                st.subheader("Variação % desde a entrada")
+                graf_var = alt.Chart(df_graf).mark_line(point=True).encode(
                     x=alt.X("data:N", title="Data"),
                     y=alt.Y("variacao_pct:Q", title="Variação (%)"),
                     color="simbolo:N",
-                    tooltip=["simbolo", "ativo", alt.Tooltip("variacao_pct:Q", format=".2f"), alt.Tooltip("preco_atual:Q", format=".2f")]
+                    tooltip=["simbolo", "ativo", alt.Tooltip("variacao_pct:Q", format=".2f")]
                 ).properties(height=400)
-                st.altair_chart(graf_var, use_container_width=True)
+
+                linha_zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#94a3b8", strokeDash=[4, 4]).encode(y="y:Q")
+                st.altair_chart((graf_var + linha_zero), use_container_width=True)
+                st.caption("Acima da linha cinza = lucro. Abaixo = prejuízo.")
 
             st.download_button("Baixar histórico backtest", dataframe_para_excel_bytes(df_hist), "backtest_historico.xlsx", key="dl_bt")
 
@@ -737,9 +821,16 @@ with tab6:
     5. Cole os dados abaixo
     """)
 
-    tg_token = st.text_input("Token do bot", type="password", key="tg_token")
-    tg_chat_id = st.text_input("Chat ID", key="tg_chat_id")
+    tg_token = st.text_input("Token do bot", type="password", key="tg_token",
+                             value=st.session_state.get("tg_token_salvo", ""))
+    tg_chat_id = st.text_input("Chat ID", key="tg_chat_id",
+                               value=st.session_state.get("tg_chat_salvo", ""))
     tg_tickers = st.text_input("Ativos para monitorar (separar por vírgula)", placeholder="PETR4, VALE3, BBAS3", key="tg_tickers")
+
+    if st.button("Salvar configurações do Telegram", key="btn_tg_salvar"):
+        st.session_state["tg_token_salvo"] = tg_token
+        st.session_state["tg_chat_salvo"] = tg_chat_id
+        st.success("Configurações salvas! O scanner vai enviar relatórios automaticamente ao Telegram.")
 
     col_tg1, col_tg2 = st.columns(2)
 
@@ -748,6 +839,8 @@ with tab6:
             if not tg_token or not tg_chat_id:
                 st.error("Configure o token e chat ID primeiro.")
             else:
+                st.session_state["tg_token_salvo"] = tg_token
+                st.session_state["tg_chat_salvo"] = tg_chat_id
                 tickers = [t.strip().upper() for t in tg_tickers.split(",") if t.strip()] if tg_tickers else None
                 with st.spinner("Gerando e enviando relatório..."):
                     from telegram_bot import gerar_relatorio_scanner
