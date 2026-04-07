@@ -12,27 +12,33 @@ st.set_page_config(page_title="Sistema de Análise de Opções", layout="wide")
 # -----------------------------
 # AUTENTICAÇÃO
 # -----------------------------
-USUARIOS = {
-    os.environ.get("APP_USER", "admin"): os.environ.get("APP_PASS", "admin123")
-}
+def obter_credenciais():
+    try:
+        user = st.secrets["APP_USER"]
+        pwd = st.secrets["APP_PASS"]
+    except Exception:
+        user = os.environ.get("APP_USER", "admin")
+        pwd = os.environ.get("APP_PASS", "admin123")
+    return {user: pwd}
 
-def tela_login():
-    st.title("Login")
-    usuario = st.text_input("Usuário")
-    senha = st.text_input("Senha", type="password")
-    if st.button("Entrar"):
-        if usuario in USUARIOS and USUARIOS[usuario] == senha:
-            st.session_state["autenticado"] = True
-            st.session_state["usuario"] = usuario
-            st.rerun()
-        else:
-            st.error("Usuário ou senha incorretos.")
+USUARIOS = obter_credenciais()
 
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
 
 if not st.session_state["autenticado"]:
-    tela_login()
+    st.title("Login")
+    with st.form("login_form"):
+        usuario = st.text_input("Usuário")
+        senha = st.text_input("Senha", type="password")
+        enviou = st.form_submit_button("Entrar")
+        if enviou:
+            if usuario in USUARIOS and USUARIOS[usuario] == senha:
+                st.session_state["autenticado"] = True
+                st.session_state["usuario"] = usuario
+                st.rerun()
+            else:
+                st.error("Usuário ou senha incorretos.")
     st.stop()
 
 CSV_FILE = "trades_log.csv"
