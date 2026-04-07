@@ -6,7 +6,15 @@ import math
 import pandas as pd
 import altair as alt
 from io import BytesIO
-import requests
+
+from modelos import black_scholes, binomial_crr, monte_carlo, comparar_modelos, calcular_distorcao, cdf_normal
+from oplab_api import get_ativo, get_opcoes, get_ativos_com_opcoes_br, filtrar_opcoes, preco_mercado
+from scanner import escanear_mercado, selecionar_backtest, escanear_ativo
+from backtest import (
+    carregar_carteira, salvar_carteira, adicionar_ao_backtest,
+    atualizar_backtest, carregar_historico_backtest, gerar_relatorio_backtest
+)
+from telegram_bot import enviar_mensagem, enviar_relatorio_diario
 
 st.set_page_config(page_title="Sistema de Análise de Opções", layout="wide")
 
@@ -34,309 +42,138 @@ if not st.session_state["autenticado"]:
             st.error("Usuário ou senha incorretos.")
     st.stop()
 
-CSV_FILE = "trades_log.csv"
-
-COLUNAS_CSV = [
-    "data",
-    "ativo",
-    "tipo",
-    "quantidade_contratos",
-    "lote_por_contrato",
-    "spot",
-    "strike",
-    "dias_vencimento",
-    "vol_implicita_pct",
-    "taxa_risco_pct",
-    "preco_pago",
-    "preco_teorico",
-    "distorcao_pct",
-    "prazo_score",
-    "desconto_score",
-    "liquidez_score",
-    "probabilidade_score",
-    "ativo_score",
-    "assimetria_score",
-    "media_final",
-    "decisao",
-    "tese",
-    "risco_principal",
-    "status_operacao",
-    "data_saida",
-    "observacao_pos_operacao",
-    "resultado_real"
-]
-
 # -----------------------------
 # ARQUIVOS
 # -----------------------------
+CSV_FILE = "trades_log.csv"
+
+COLUNAS_CSV = [
+    "data", "ativo", "tipo", "quantidade_contratos", "lote_por_contrato",
+    "spot", "strike", "dias_vencimento", "vol_implicita_pct", "taxa_risco_pct",
+    "preco_pago", "preco_teorico", "distorcao_pct", "prazo_score", "desconto_score",
+    "liquidez_score", "probabilidade_score", "ativo_score", "assimetria_score",
+    "media_final", "decisao", "tese", "risco_principal", "status_operacao",
+    "data_saida", "observacao_pos_operacao", "resultado_real"
+]
+
 def garantir_csv():
     if not os.path.exists(CSV_FILE):
         with open(CSV_FILE, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.writer(f, quoting=csv.QUOTE_ALL)
-            writer.writerow(COLUNAS_CSV)
+            csv.writer(f, quoting=csv.QUOTE_ALL).writerow(COLUNAS_CSV)
 
 def salvar_csv(linha):
     with open(CSV_FILE, "a", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f, quoting=csv.QUOTE_ALL)
-        writer.writerow(linha)
+        csv.writer(f, quoting=csv.QUOTE_ALL).writerow(linha)
 
 def carregar_historico():
     if not os.path.exists(CSV_FILE):
         return pd.DataFrame(columns=COLUNAS_CSV)
-
     try:
-        df = pd.read_csv(
-            CSV_FILE,
-            encoding="utf-8-sig",
-            sep=",",
-            engine="python",
-            on_bad_lines="skip"
-        )
-
+        df = pd.read_csv(CSV_FILE, encoding="utf-8-sig", sep=",", engine="python", on_bad_lines="skip")
         for col in COLUNAS_CSV:
             if col not in df.columns:
                 df[col] = ""
-
-        df = df[COLUNAS_CSV]
-        return df
+        return df[COLUNAS_CSV]
     except Exception:
         return pd.DataFrame(columns=COLUNAS_CSV)
 
-def salvar_historico_df(df: pd.DataFrame):
+def salvar_historico_df(df):
     df.to_csv(CSV_FILE, index=False, encoding="utf-8-sig", quoting=csv.QUOTE_ALL)
 
-def dataframe_para_excel_bytes(df: pd.DataFrame) -> bytes:
+def dataframe_para_excel_bytes(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Historico")
+        df.to_excel(writer, index=False, sheet_name="Dados")
     return output.getvalue()
 
 # -----------------------------
-# REGRAS / MODELO
+# SCORES
 # -----------------------------
-def detectar_tipo_texto(texto: str) -> str:
-    t = str(texto).lower()
-    if any(p in t for p in ["transcrição", "call", "áudio", "reunião", "aula"]):
-        return "Transcrição / fala"
-    if any(p in t for p in ["dcf", "wacc", "valuation", "múltiplo", "preço-alvo"]):
-        return "Valuation / fundamentos"
-    if any(p in t for p in ["call", "put", "strike", "black-scholes", "theta", "delta", "itm", "otm", "volatilidade"]):
-        return "Opções / derivativos"
-    return "Tese / ideia geral"
-
-def cdf_normal(x: float) -> float:
-    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-def black_scholes(tipo: str, S: float, K: float, T: float, r: float, sigma: float) -> float:
-    if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
-        if tipo.lower() == "call":
-            return max(0.0, S - K)
-        return max(0.0, K - S)
-
-    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
-    d2 = d1 - sigma * math.sqrt(T)
-
-    if tipo.lower() == "call":
-        preco = S * cdf_normal(d1) - K * math.exp(-r * T) * cdf_normal(d2)
-    else:
-        preco = K * math.exp(-r * T) * cdf_normal(-d2) - S * cdf_normal(-d1)
-
-    return max(0.0, round(preco, 4))
-
-def score_prazo(dias: int) -> int:
-    if dias >= 180:
-        return 5
-    if dias >= 120:
-        return 4
-    if dias >= 60:
-        return 3
-    if dias >= 30:
-        return 2
+def score_prazo(dias):
+    if dias >= 180: return 5
+    if dias >= 120: return 4
+    if dias >= 60: return 3
+    if dias >= 30: return 2
     return 1
 
-def calcular_distorcao(preco_pago: float, preco_teorico: float) -> float:
-    if preco_teorico <= 0:
-        return 0.0
-    return round(((preco_teorico - preco_pago) / preco_teorico) * 100, 2)
-
-def score_desconto(preco_pago: float, preco_teorico: float) -> int:
-    if preco_teorico <= 0:
-        return 1
-
-    desconto = (preco_teorico - preco_pago) / preco_teorico
-
-    if desconto >= 0.60:
-        return 5
-    if desconto >= 0.40:
-        return 4
-    if desconto >= 0.25:
-        return 3
-    if desconto >= 0.10:
-        return 2
+def score_desconto(preco_pago, preco_teorico):
+    if preco_teorico <= 0: return 1
+    d = (preco_teorico - preco_pago) / preco_teorico
+    if d >= 0.60: return 5
+    if d >= 0.40: return 4
+    if d >= 0.25: return 3
+    if d >= 0.10: return 2
     return 1
 
-def score_liquidez(nivel: str) -> int:
-    nivel = str(nivel).lower()
-    if nivel == "alta":
-        return 5
-    if nivel == "média":
-        return 3
+def score_liquidez(nivel):
+    n = str(nivel).lower()
+    if n == "alta": return 5
+    if n == "média": return 3
     return 2
 
-def score_probabilidade(texto: str, dias: int, spot: float, strike: float, tipo: str) -> int:
+def score_probabilidade(texto, dias, spot, strike, tipo):
     t = str(texto).lower()
-    pontos = 2
+    p = 2
+    if dias >= 120: p += 1
+    if tipo.lower() == "call" and spot >= strike * 0.9: p += 1
+    if tipo.lower() == "put" and spot <= strike * 1.1: p += 1
+    for w in ["probabilidade", "estatística", "cenário favorável", "tese forte", "validação"]:
+        if w in t: p += 1
+    return min(p, 5)
 
-    if dias >= 120:
-        pontos += 1
-
-    if tipo.lower() == "call" and spot >= strike * 0.9:
-        pontos += 1
-    if tipo.lower() == "put" and spot <= strike * 1.1:
-        pontos += 1
-
-    palavras = ["probabilidade", "estatística", "cenário favorável", "tese forte", "validação"]
-    for p in palavras:
-        if p in t:
-            pontos += 1
-
-    return min(pontos, 5)
-
-def score_ativo(texto: str) -> int:
+def score_ativo(texto):
     t = str(texto).lower()
-    if any(p in t for p in ["empresa sólida", "bons resultados", "lucro", "crescimento", "fundamento forte", "ativo forte"]):
-        return 4
-    if any(p in t for p in ["empresa ruim", "risco de quebrar", "fundamento fraco", "ativo fraco"]):
-        return 1
+    if any(w in t for w in ["empresa sólida", "bons resultados", "lucro", "crescimento", "fundamento forte", "ativo forte"]): return 4
+    if any(w in t for w in ["empresa ruim", "risco de quebrar", "fundamento fraco", "ativo fraco"]): return 1
     return 3
 
-def score_assimetria(texto: str, preco_pago: float, distorcao: float) -> int:
+def score_assimetria(texto, preco_pago, distorcao):
     t = str(texto).lower()
-    pontos = 2
+    p = 2
+    if preco_pago <= 1: p += 1
+    if distorcao >= 40: p += 1
+    for w in ["assimetria", "ganhar muito", "perder pouco", "explosão", "distorção"]:
+        if w in t: p += 1
+    return min(p, 5)
 
-    if preco_pago <= 1:
-        pontos += 1
-    if distorcao >= 40:
-        pontos += 1
-
-    palavras = ["assimetria", "ganhar muito", "perder pouco", "explosão", "distorção"]
-    for p in palavras:
-        if p in t:
-            pontos += 1
-
-    return min(pontos, 5)
-
-def decisao_final(media: float) -> str:
-    if media >= 4.2:
-        return "Executar forte"
-    if media >= 3.4:
-        return "Executar pequeno"
-    if media >= 2.5:
-        return "Observar"
+def decisao_final(media):
+    if media >= 4.2: return "Executar forte"
+    if media >= 3.4: return "Executar pequeno"
+    if media >= 2.5: return "Observar"
     return "Evitar"
 
-def risco_principal(liquidez: str, dias: int, texto: str, sigma_pct: float) -> str:
+def risco_principal(liquidez, dias, texto, sigma_pct):
     t = str(texto).lower()
-    if str(liquidez).lower() == "baixa":
-        return "Liquidez ruim pode dificultar a entrada e a saída da operação."
-    if dias < 30:
-        return "Prazo curto aumenta a pressão do tempo contra a opção."
-    if sigma_pct >= 60:
-        return "Volatilidade muito alta pode inflar o preço e aumentar o risco de correção."
-    if "valuation" in t and "premissa" in t:
-        return "A tese pode depender demais de premissas frágeis."
+    if str(liquidez).lower() == "baixa": return "Liquidez ruim pode dificultar a entrada e a saída da operação."
+    if dias < 30: return "Prazo curto aumenta a pressão do tempo contra a opção."
+    if sigma_pct >= 60: return "Volatilidade muito alta pode inflar o preço e aumentar o risco de correção."
     return "Risco de a tese não se confirmar ou de uma variável importante mudar."
 
-def validacao() -> str:
-    return "A tese melhora se o ativo andar na direção esperada, a distorção diminuir e o cenário principal continuar válido."
-
-def invalidacao() -> str:
-    return "A tese enfraquece se o ativo não evoluir, a liquidez piorar, o tempo apertar demais ou a premissa central falhar."
-
-# -----------------------------
-# OPLAB API
-# -----------------------------
-OPLAB_TOKEN = "igLO7xOgvGN5C1bWhzmP7mGaIVh6lkddO7MdfP2WGQ2rcSg3uZsEJW012KXqAz5f--6nuuFsZFm9PUpBIqwMX0uQ==--ZDcwMThkZjIwYjI5NTA4ZmNhZTY2NGIxMTJhODE0Njg="
-OPLAB_BASE = "https://api.oplab.com.br/v3"
-OPLAB_HEADERS = {"Access-Token": OPLAB_TOKEN}
-
-@st.cache_data(ttl=300)
-def oplab_buscar_ativo(ticker: str):
-    try:
-        r = requests.get(f"{OPLAB_BASE}/market/stocks/{ticker.upper()}", headers=OPLAB_HEADERS, timeout=10)
-        if r.status_code == 200:
-            return r.json()
-    except Exception:
-        pass
-    return None
-
-@st.cache_data(ttl=300)
-def oplab_buscar_opcoes(ticker: str):
-    try:
-        r = requests.get(f"{OPLAB_BASE}/market/options/{ticker.upper()}", headers=OPLAB_HEADERS, timeout=10)
-        if r.status_code == 200:
-            return r.json()
-    except Exception:
-        pass
-    return None
-
-def classificar_liquidez_volume(volume: int) -> str:
-    if volume >= 50000:
-        return "Alta"
-    if volume >= 5000:
-        return "Média"
+def classificar_liquidez_volume(volume):
+    if volume >= 50000: return "Alta"
+    if volume >= 5000: return "Média"
     return "Baixa"
 
 # -----------------------------
-# PAYOFF E MÉTRICAS
+# PAYOFF
 # -----------------------------
-def gerar_payoff(tipo: str, strike: float, premio: float, spot_ref: float, contratos: int, lote: int):
-    if spot_ref <= 0:
-        spot_ref = strike if strike > 0 else 1
-
+def gerar_payoff(tipo, strike, premio, spot_ref, contratos, lote):
+    if spot_ref <= 0: spot_ref = strike if strike > 0 else 1
     inicio = max(0.01, spot_ref * 0.5)
     fim = spot_ref * 1.5
     passos = 121
-
     precos = [inicio + (fim - inicio) * i / (passos - 1) for i in range(passos)]
-    payoff_unitario = []
-    payoff_total = []
-
-    multiplicador = contratos * lote
-
+    mult = contratos * lote
+    dados = []
     for s in precos:
         if tipo.lower() == "call":
-            valor = max(0, s - strike) - premio
+            v = max(0, s - strike) - premio
         else:
-            valor = max(0, strike - s) - premio
-
-        payoff_unitario.append(round(valor, 4))
-        payoff_total.append(round(valor * multiplicador, 4))
-
-    df = pd.DataFrame({
-        "Preço do ativo no vencimento": precos,
-        "Resultado por opção": payoff_unitario,
-        "Resultado total": payoff_total
-    })
-
+            v = max(0, strike - s) - premio
+        dados.append({"Preço do ativo no vencimento": s, "Resultado por opção": round(v, 4), "Resultado total": round(v * mult, 4)})
+    df = pd.DataFrame(dados)
     df["Zona"] = df["Resultado total"].apply(lambda x: "Lucro" if x >= 0 else "Prejuízo")
     return df
-
-def calcular_break_even(tipo: str, strike: float, premio: float):
-    if tipo.lower() == "call":
-        return strike + premio
-    return strike - premio
-
-def perda_maxima_total(premio: float, contratos: int, lote: int):
-    return round(premio * contratos * lote, 2)
-
-def ganho_maximo_total(tipo: str, strike: float, premio: float, contratos: int, lote: int):
-    if tipo.lower() == "call":
-        return "Ilimitado"
-    return round((strike - premio) * contratos * lote, 2)
-
-def custo_total(premio: float, contratos: int, lote: int):
-    return round(premio * contratos * lote, 2)
 
 # -----------------------------
 # APP
@@ -349,14 +186,26 @@ with st.sidebar:
         st.session_state["autenticado"] = False
         st.session_state["usuario"] = ""
         st.rerun()
+    st.divider()
+    st.caption("Sistema de Análise de Opções v2.0")
+    st.caption("Dados ao vivo via OpLab API")
 
-tab1, tab2, tab3 = st.tabs(["Nova análise", "Histórico", "Opções ao vivo"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "Nova análise",
+    "Histórico",
+    "Opções ao vivo",
+    "Scanner de oportunidades",
+    "Backtest",
+    "Telegram"
+])
 
+# =============================================
+# TAB 1 — NOVA ANÁLISE
+# =============================================
 with tab1:
-    st.title("Sistema de Análise de Opções")
-    st.caption("Leitura prática, linguagem simples e análise visual — dados ao vivo via OpLab")
+    st.title("Nova análise de opção")
+    st.caption("Busque dados ao vivo na OpLab ou preencha manualmente")
 
-    st.subheader("Buscar dados ao vivo")
     busca_col1, busca_col2 = st.columns([1, 3])
     with busca_col1:
         ativo = st.text_input("Ativo", placeholder="Ex: PETR4")
@@ -365,22 +214,17 @@ with tab1:
         st.write("")
         buscar = st.button("Buscar na OpLab")
 
-    dados_ativo = None
-    opcoes_lista = []
     opcao_selecionada = None
 
     if buscar and ativo:
-        dados_ativo = oplab_buscar_ativo(ativo)
+        dados_ativo = get_ativo(ativo)
         if dados_ativo:
             st.session_state["oplab_ativo"] = dados_ativo
-            opcoes_raw = oplab_buscar_opcoes(ativo)
-            if opcoes_raw:
-                st.session_state["oplab_opcoes"] = opcoes_raw
-            else:
-                st.session_state["oplab_opcoes"] = []
-            st.success(f"{ativo.upper()} encontrado — preço atual: R$ {dados_ativo['close']:.2f} | Vol. implícita: {dados_ativo.get('iv_current', 0):.2f}%")
+            opcoes_raw = get_opcoes(ativo) or []
+            st.session_state["oplab_opcoes"] = opcoes_raw
+            st.success(f"{ativo.upper()} — Preço: R$ {dados_ativo['close']:.2f} | IV: {dados_ativo.get('iv_current', 0):.2f}%")
         else:
-            st.error(f"Ativo '{ativo}' não encontrado na OpLab.")
+            st.error(f"Ativo '{ativo}' não encontrado.")
             st.session_state["oplab_ativo"] = None
             st.session_state["oplab_opcoes"] = []
 
@@ -388,90 +232,67 @@ with tab1:
     opcoes_raw = st.session_state.get("oplab_opcoes", [])
 
     if opcoes_raw:
-        hoje = date.today()
-        opcoes_filtradas = [
-            o for o in opcoes_raw
-            if o.get("days_to_maturity", 0) > 0 and (o.get("bid", 0) > 0 or o.get("ask", 0) > 0)
-        ]
-        opcoes_filtradas.sort(key=lambda o: (o.get("category", ""), o.get("due_date", ""), o.get("strike", 0)))
-
-        nomes_opcoes = [
-            f"{o['category']} | Strike {o['strike']:.2f} | Venc. {o['due_date']} | {o['days_to_maturity']}d | Bid {o.get('bid',0):.2f} Ask {o.get('ask',0):.2f} | Vol {o.get('volume',0)}"
-            for o in opcoes_filtradas
-        ]
-
-        if nomes_opcoes:
-            idx_escolha = st.selectbox("Selecionar opção", range(len(nomes_opcoes)), format_func=lambda i: nomes_opcoes[i])
+        opcoes_filtradas = sorted(
+            [o for o in opcoes_raw if o.get("days_to_maturity", 0) > 0 and (o.get("bid", 0) > 0 or o.get("ask", 0) > 0)],
+            key=lambda o: (o.get("category", ""), o.get("due_date", ""), o.get("strike", 0))
+        )
+        if opcoes_filtradas:
+            nomes = [
+                f"{o['category']} | Strike {o['strike']:.2f} | {o['due_date']} | {o['days_to_maturity']}d | Bid {o.get('bid',0):.2f} Ask {o.get('ask',0):.2f}"
+                for o in opcoes_filtradas
+            ]
+            idx_escolha = st.selectbox("Selecionar opção", range(len(nomes)), format_func=lambda i: nomes[i])
             opcao_selecionada = opcoes_filtradas[idx_escolha]
 
     st.divider()
 
-    default_tipo = 0
-    default_spot = 0.0
-    default_strike = 0.0
-    default_dias = 1
-    default_vol = 30.0
-    default_preco = 0.0
-    default_lote = 100
-    default_liquidez = 0
+    d_tipo = 0
+    d_spot = d_strike = d_preco = 0.0
+    d_dias = 1
+    d_vol = 30.0
+    d_lote = 100
+    d_liq = 0
 
     if opcao_selecionada:
-        default_tipo = 0 if opcao_selecionada["category"] == "CALL" else 1
-        default_spot = float(opcao_selecionada.get("spot_price", 0) or (dados_ativo["close"] if dados_ativo else 0))
-        default_strike = float(opcao_selecionada.get("strike", 0))
-        default_dias = int(opcao_selecionada.get("days_to_maturity", 1))
-        default_preco = float(opcao_selecionada.get("ask", 0) or opcao_selecionada.get("close", 0))
-        default_lote = int(opcao_selecionada.get("contract_size", 100))
-        vol_do_ativo = float(dados_ativo.get("iv_current", 30)) if dados_ativo else 30.0
-        default_vol = vol_do_ativo
-        vol_opcao = opcao_selecionada.get("volume", 0)
-        liq_label = classificar_liquidez_volume(vol_opcao)
-        default_liquidez = ["Baixa", "Média", "Alta"].index(liq_label)
+        d_tipo = 0 if opcao_selecionada["category"] == "CALL" else 1
+        d_spot = float(opcao_selecionada.get("spot_price", 0) or (dados_ativo["close"] if dados_ativo else 0))
+        d_strike = float(opcao_selecionada.get("strike", 0))
+        d_dias = int(opcao_selecionada.get("days_to_maturity", 1))
+        d_preco = float(opcao_selecionada.get("ask", 0) or opcao_selecionada.get("close", 0))
+        d_lote = int(opcao_selecionada.get("contract_size", 100))
+        d_vol = float(dados_ativo.get("iv_current", 30)) if dados_ativo else 30.0
+        d_liq = ["Baixa", "Média", "Alta"].index(classificar_liquidez_volume(opcao_selecionada.get("volume", 0)))
     elif dados_ativo:
-        default_spot = float(dados_ativo.get("close", 0))
-        default_vol = float(dados_ativo.get("iv_current", 30))
+        d_spot = float(dados_ativo.get("close", 0))
+        d_vol = float(dados_ativo.get("iv_current", 30))
 
     col1, col2 = st.columns(2)
-
     with col1:
-        tipo = st.selectbox("Tipo da opção", ["Call", "Put"], index=default_tipo)
-        quantidade_contratos = st.number_input("Quantidade de contratos", min_value=1, step=1, value=1)
-        lote_por_contrato = st.number_input("Lote por contrato", min_value=1, step=1, value=default_lote)
-        spot = st.number_input("Preço atual do ativo", min_value=0.0, format="%.2f", value=default_spot)
-        strike = st.number_input("Strike", min_value=0.0, format="%.2f", value=default_strike)
-        dias_vencimento = st.number_input("Dias até o vencimento", min_value=1, step=1, value=default_dias)
-        vol_implicita_pct = st.number_input("Volatilidade implícita (%)", min_value=0.0, format="%.2f", value=default_vol)
+        tipo = st.selectbox("Tipo da opção", ["Call", "Put"], index=d_tipo)
+        quantidade_contratos = st.number_input("Contratos", min_value=1, step=1, value=1)
+        lote_por_contrato = st.number_input("Lote por contrato", min_value=1, step=1, value=d_lote)
+        spot = st.number_input("Preço atual do ativo", min_value=0.0, format="%.2f", value=d_spot)
+        strike = st.number_input("Strike", min_value=0.0, format="%.2f", value=d_strike)
+        dias_vencimento = st.number_input("Dias até vencimento", min_value=1, step=1, value=d_dias)
+        vol_implicita_pct = st.number_input("Volatilidade implícita (%)", min_value=0.0, format="%.2f", value=d_vol)
         taxa_risco_pct = st.number_input("Taxa livre de risco (%)", min_value=0.0, format="%.2f", value=10.50)
-        preco_pago = st.number_input("Preço pago por opção", min_value=0.0, format="%.2f", value=default_preco)
+        preco_pago = st.number_input("Preço pago por opção", min_value=0.0, format="%.2f", value=d_preco)
 
     with col2:
-        liquidez = st.selectbox("Liquidez", ["Baixa", "Média", "Alta"], index=default_liquidez)
-        tese = st.text_area(
-            "Tese / observações",
-            height=160,
-            placeholder="Explique a ideia com suas palavras."
-        )
+        liquidez = st.selectbox("Liquidez", ["Baixa", "Média", "Alta"], index=d_liq)
+        tese = st.text_area("Tese / observações", height=160, placeholder="Explique a ideia com suas palavras.")
         status_operacao = st.selectbox("Status da operação", ["Aberta", "Encerrada", "Stopada", "Gain"])
         data_saida = st.text_input("Data de saída (opcional)", placeholder="Ex: 2026-04-07")
-        observacao_pos_operacao = st.text_area(
-            "Observação pós-operação",
-            height=70,
-            placeholder="Ex: entrei pequeno, mercado piorou, tese ficou mais forte..."
-        )
-        resultado_real = st.number_input(
-            "Resultado real da operação (opcional)",
-            value=0.0,
-            format="%.2f"
-        )
+        observacao_pos = st.text_area("Observação pós-operação", height=70)
+        resultado_real = st.number_input("Resultado real (opcional)", value=0.0, format="%.2f")
 
     if st.button("Analisar"):
-        tipo_material = detectar_tipo_texto(tese)
-
         T = dias_vencimento / 365
         sigma = vol_implicita_pct / 100
         r = taxa_risco_pct / 100
 
-        preco_teorico = black_scholes(tipo, spot, strike, T, r, sigma)
+        modelos = comparar_modelos(tipo, spot, strike, T, r, sigma)
+        preco_teorico = modelos["black_scholes"]
         distorcao = calcular_distorcao(preco_pago, preco_teorico)
 
         prazo_s = score_prazo(dias_vencimento)
@@ -480,500 +301,480 @@ with tab1:
         prob_s = score_probabilidade(tese, dias_vencimento, spot, strike, tipo)
         ativo_s = score_ativo(tese)
         assimetria_s = score_assimetria(tese, preco_pago, distorcao)
-
         media = round((prazo_s + desconto_s + liquidez_s + prob_s + ativo_s + assimetria_s) / 6, 2)
         decisao = decisao_final(media)
         risco = risco_principal(liquidez, dias_vencimento, tese, vol_implicita_pct)
-        val = validacao()
-        inval = invalidacao()
         data_analise = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        break_even = calcular_break_even(tipo, strike, preco_pago)
-        custo_total_operacao = custo_total(preco_pago, quantidade_contratos, lote_por_contrato)
-        perda_max = perda_maxima_total(preco_pago, quantidade_contratos, lote_por_contrato)
-        ganho_max = ganho_maximo_total(tipo, strike, preco_pago, quantidade_contratos, lote_por_contrato)
+        break_even = strike + preco_pago if tipo.lower() == "call" else strike - preco_pago
+        custo_tot = round(preco_pago * quantidade_contratos * lote_por_contrato, 2)
+        perda_max = custo_tot
+        ganho_max = "Ilimitado" if tipo.lower() == "call" else round((strike - preco_pago) * quantidade_contratos * lote_por_contrato, 2)
 
+        # RESUMO
         st.subheader("Resumo da análise")
-
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Preço teórico", f"{preco_teorico:.4f}")
+        c1.metric("Preço teórico (B&S)", f"{preco_teorico:.4f}")
         c2.metric("Distorção", f"{distorcao}%")
         c3.metric("Nota média", f"{media}/5")
         c4.metric("Decisão", decisao)
 
-        st.subheader("Operação em linguagem simples")
-        st.write(f"**Ativo:** {ativo if ativo else '-'}")
-        st.write(f"**Tipo:** {tipo}")
-        st.write(f"**Quantidade de contratos:** {quantidade_contratos}")
-        st.write(f"**Lote por contrato:** {lote_por_contrato}")
-        st.write(f"**Preço atual do ativo:** {spot:.2f}")
-        st.write(f"**Strike:** {strike:.2f}")
-        st.write(f"**Dias até o vencimento:** {dias_vencimento}")
-        st.write(f"**Preço pago por opção:** {preco_pago:.2f}")
-        st.write(f"**Liquidez:** {liquidez}")
-        st.write(f"**Status da operação:** {status_operacao}")
-        st.write(f"**Data de saída:** {data_saida if data_saida else '-'}")
-        st.write(f"**Tipo de material identificado:** {tipo_material}")
+        # 4 MODELOS
+        st.subheader("Comparação entre modelos de precificação")
+        mod_col1, mod_col2, mod_col3, mod_col4 = st.columns(4)
+        mod_col1.metric("Black-Scholes", f"{modelos['black_scholes']:.4f}")
+        mod_col2.metric("Binomial (CRR)", f"{modelos['binomial']:.4f}")
+        mod_col3.metric("Monte Carlo", f"{modelos['monte_carlo']:.4f}")
+        mod_col4.metric("Média dos modelos", f"{modelos['media_modelos']:.4f}")
 
-        st.subheader("Leitura rápida da operação")
-        c5, c6, c7, c8 = st.columns(4)
-        c5.metric("Preço de equilíbrio", f"{break_even:.2f}")
-        c6.metric("Custo total", f"{custo_total_operacao:.2f}")
-        c7.metric("Perda máxima total", f"{perda_max:.2f}")
-        c8.metric("Ganho máximo total", str(ganho_max))
+        dist_bs = calcular_distorcao(preco_pago, modelos["black_scholes"])
+        dist_bin = calcular_distorcao(preco_pago, modelos["binomial"])
+        dist_mc = calcular_distorcao(preco_pago, modelos["monte_carlo"])
+        dist_media = calcular_distorcao(preco_pago, modelos["media_modelos"])
 
-        if distorcao >= 0:
-            st.success(f"A opção está {distorcao}% abaixo do preço teórico calculado.")
-        else:
-            st.error(f"A opção está {abs(distorcao)}% acima do preço teórico calculado.")
-
-        st.subheader("Comparação entre preço pago e preço teórico")
-        comparacao_df = pd.DataFrame({
-            "Métrica": ["Preço pago", "Preço teórico"],
-            "Valor": [preco_pago, preco_teorico]
+        comp_df = pd.DataFrame({
+            "Modelo": ["Preço pago", "Black-Scholes", "Binomial", "Monte Carlo", "Média"],
+            "Valor": [preco_pago, modelos["black_scholes"], modelos["binomial"], modelos["monte_carlo"], modelos["media_modelos"]],
+            "Distorção (%)": [0, dist_bs, dist_bin, dist_mc, dist_media]
         })
 
-        graf_barra = alt.Chart(comparacao_df).mark_bar(size=60).encode(
-            x=alt.X("Métrica:N", title=""),
-            y=alt.Y("Valor:Q", title="Valor"),
-            color=alt.Color(
-                "Métrica:N",
-                scale=alt.Scale(
-                    domain=["Preço pago", "Preço teórico"],
-                    range=["#dc2626", "#16a34a"]
-                ),
-                legend=None
-            ),
-            tooltip=["Métrica", alt.Tooltip("Valor:Q", format=".4f")]
+        graf_modelos = alt.Chart(comp_df).mark_bar(size=50).encode(
+            x=alt.X("Modelo:N", sort=["Preço pago", "Black-Scholes", "Binomial", "Monte Carlo", "Média"]),
+            y=alt.Y("Valor:Q"),
+            color=alt.Color("Modelo:N", scale=alt.Scale(
+                domain=["Preço pago", "Black-Scholes", "Binomial", "Monte Carlo", "Média"],
+                range=["#dc2626", "#16a34a", "#2563eb", "#9333ea", "#f59e0b"]
+            ), legend=None),
+            tooltip=["Modelo", alt.Tooltip("Valor:Q", format=".4f"), alt.Tooltip("Distorção (%):Q", format=".2f")]
         ).properties(height=320)
+        st.altair_chart(graf_modelos, use_container_width=True)
 
-        st.altair_chart(graf_barra, use_container_width=True)
+        # LEITURA RÁPIDA
+        st.subheader("Leitura rápida")
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("Break-even", f"{break_even:.2f}")
+        c6.metric("Custo total", f"{custo_tot:.2f}")
+        c7.metric("Perda máxima", f"{perda_max:.2f}")
+        c8.metric("Ganho máximo", str(ganho_max))
 
+        if distorcao >= 0:
+            st.success(f"Opção {distorcao}% abaixo do preço teórico (B&S).")
+        else:
+            st.error(f"Opção {abs(distorcao)}% acima do preço teórico (B&S).")
+
+        # SCORECARD
         st.subheader("Scorecard")
-        st.write(f"**Prazo:** {prazo_s}/5")
-        st.write(f"**Desconto:** {desconto_s}/5")
-        st.write(f"**Liquidez:** {liquidez_s}/5")
-        st.write(f"**Probabilidade:** {prob_s}/5")
-        st.write(f"**Qualidade do ativo:** {ativo_s}/5")
-        st.write(f"**Assimetria:** {assimetria_s}/5")
+        scores_df = pd.DataFrame({
+            "Critério": ["Prazo", "Desconto", "Liquidez", "Probabilidade", "Qualidade do ativo", "Assimetria"],
+            "Nota": [prazo_s, desconto_s, liquidez_s, prob_s, ativo_s, assimetria_s]
+        })
+        graf_scores = alt.Chart(scores_df).mark_bar().encode(
+            x=alt.X("Nota:Q", scale=alt.Scale(domain=[0, 5])),
+            y=alt.Y("Critério:N", sort="-x"),
+            color=alt.condition(alt.datum.Nota >= 4, alt.value("#16a34a"), alt.value("#f59e0b")),
+            tooltip=["Critério", "Nota"]
+        ).properties(height=250)
+        st.altair_chart(graf_scores, use_container_width=True)
 
-        st.subheader("O que fortalece a tese")
-        st.write(val)
+        st.write(f"**Risco principal:** {risco}")
 
-        st.subheader("O que enfraquece a tese")
-        st.write(inval)
-
-        st.subheader("Risco principal")
-        st.write(risco)
-
+        # PAYOFF
         st.subheader("Gráfico de payoff no vencimento")
         payoff_df = gerar_payoff(tipo, strike, preco_pago, spot, quantidade_contratos, lote_por_contrato)
-
         base = alt.Chart(payoff_df).encode(
-            x=alt.X("Preço do ativo no vencimento:Q", title="Preço do ativo no vencimento"),
+            x=alt.X("Preço do ativo no vencimento:Q"),
             y=alt.Y("Resultado total:Q", title="Lucro / prejuízo total"),
-            tooltip=[
-                alt.Tooltip("Preço do ativo no vencimento:Q", format=".2f"),
-                alt.Tooltip("Resultado total:Q", format=".2f"),
-                alt.Tooltip("Zona:N")
-            ]
+            tooltip=[alt.Tooltip("Preço do ativo no vencimento:Q", format=".2f"), alt.Tooltip("Resultado total:Q", format=".2f"), "Zona:N"]
         )
-
-        area = base.mark_area(opacity=0.35).encode(
-            color=alt.Color(
-                "Zona:N",
-                scale=alt.Scale(domain=["Lucro", "Prejuízo"], range=["#16a34a", "#dc2626"]),
-                legend=None
-            )
-        )
-
+        area = base.mark_area(opacity=0.35).encode(color=alt.Color("Zona:N", scale=alt.Scale(domain=["Lucro", "Prejuízo"], range=["#16a34a", "#dc2626"]), legend=None))
         linha = base.mark_line(size=3, color="#2563eb")
-
         linha_zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#94a3b8").encode(y="y:Q")
-
-        linha_break = alt.Chart(pd.DataFrame({
-            "x": [break_even],
-            "label": [f"Break-even: {break_even:.2f}"]
-        })).mark_rule(color="#f59e0b", strokeDash=[6, 4]).encode(
-            x="x:Q"
-        )
-
-        texto_break = alt.Chart(pd.DataFrame({
-            "x": [break_even],
-            "y": [0],
-            "label": [f"Break-even: {break_even:.2f}"]
-        })).mark_text(
-            align="left",
-            dx=8,
-            dy=-10,
-            color="#f59e0b"
-        ).encode(
-            x="x:Q",
-            y="y:Q",
-            text="label:N"
-        )
-
-        linha_strike = alt.Chart(pd.DataFrame({
-            "x": [strike],
-            "label": [f"Strike: {strike:.2f}"]
-        })).mark_rule(color="#64748b", strokeDash=[2, 2]).encode(
-            x="x:Q"
-        )
-
-        texto_strike = alt.Chart(pd.DataFrame({
-            "x": [strike],
-            "y": [0],
-            "label": [f"Strike: {strike:.2f}"]
-        })).mark_text(
-            align="right",
-            dx=-8,
-            dy=14,
-            color="#64748b"
-        ).encode(
-            x="x:Q",
-            y="y:Q",
-            text="label:N"
-        )
-
-        chart = (area + linha + linha_zero + linha_break + texto_break + linha_strike + texto_strike).properties(
-            height=420
-        ).interactive()
-
+        chart = (area + linha + linha_zero).properties(height=380).interactive()
         st.altair_chart(chart, use_container_width=True)
 
-        st.caption(
-            "Área verde representa lucro. Área vermelha representa prejuízo. "
-            "A linha amarela mostra o preço de equilíbrio e a cinza mostra o strike."
-        )
-
-        resultado = f"""# Sistema de Análise de Opções
-
-## Resumo da operação
-Ativo: {ativo}
-Tipo: {tipo}
-Quantidade de contratos: {quantidade_contratos}
-Lote por contrato: {lote_por_contrato}
-Preço atual do ativo: {spot:.2f}
-Strike: {strike:.2f}
-Dias até vencimento: {dias_vencimento}
-Volatilidade implícita: {vol_implicita_pct:.2f}%
-Taxa livre de risco: {taxa_risco_pct:.2f}%
-Preço pago por opção: {preco_pago:.2f}
-Preço teórico: {preco_teorico:.4f}
-Liquidez: {liquidez}
-
-## Tese
-{tese}
-
-## Leitura rápida
-Preço de equilíbrio: {break_even:.2f}
-Custo total: {custo_total_operacao:.2f}
-Perda máxima total: {perda_max:.2f}
-Ganho máximo total: {ganho_max}
-
-## Distorção
-{distorcao}%
-
-## Scorecard
-Prazo: {prazo_s}/5
-Desconto: {desconto_s}/5
-Liquidez: {liquidez_s}/5
-Probabilidade: {prob_s}/5
-Qualidade do ativo: {ativo_s}/5
-Assimetria: {assimetria_s}/5
-Média final: {media}/5
-
-## O que fortalece a tese
-{val}
-
-## O que enfraquece a tese
-{inval}
-
-## Risco principal
-{risco}
-
-## Status da operação
-{status_operacao}
-
-## Data de saída
-{data_saida}
-
-## Observação pós-operação
-{observacao_pos_operacao}
-
-## Resultado real
-{resultado_real}
-
-## Decisão final
-{decisao}
-
-## Data
-{data_analise}
-"""
-
-        nome_arquivo = f"output_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-        with open(nome_arquivo, "w", encoding="utf-8") as f:
-            f.write(resultado)
-
+        # SALVAR
         salvar_csv([
-            data_analise,
-            ativo,
-            tipo,
-            quantidade_contratos,
-            lote_por_contrato,
-            spot,
-            strike,
-            dias_vencimento,
-            vol_implicita_pct,
-            taxa_risco_pct,
-            preco_pago,
-            preco_teorico,
-            distorcao,
-            prazo_s,
-            desconto_s,
-            liquidez_s,
-            prob_s,
-            ativo_s,
-            assimetria_s,
-            media,
-            decisao,
-            tese,
-            risco,
-            status_operacao,
-            data_saida,
-            observacao_pos_operacao,
-            resultado_real
+            data_analise, ativo, tipo, quantidade_contratos, lote_por_contrato,
+            spot, strike, dias_vencimento, vol_implicita_pct, taxa_risco_pct,
+            preco_pago, preco_teorico, distorcao, prazo_s, desconto_s,
+            liquidez_s, prob_s, ativo_s, assimetria_s, media, decisao,
+            tese, risco, status_operacao, data_saida, observacao_pos, resultado_real
         ])
+        st.info(f"Análise salva em {CSV_FILE}")
 
-        st.info(f"Análise salva em: {nome_arquivo}")
-        st.info(f"Registro adicionado em: {CSV_FILE}")
-
+# =============================================
+# TAB 2 — HISTÓRICO
+# =============================================
 with tab2:
     st.title("Histórico das análises")
-
     df = carregar_historico()
 
     if df.empty:
-        st.warning("Ainda não há histórico válido para mostrar.")
-        st.caption("Se você tinha um CSV antigo bagunçado, esta versão ignora linhas ruins.")
+        st.warning("Ainda não há histórico.")
     else:
-        st.subheader("Dashboard de performance")
-
         df["media_final"] = pd.to_numeric(df["media_final"], errors="coerce")
         df["resultado_real"] = pd.to_numeric(df["resultado_real"], errors="coerce")
 
-        total_operacoes = len(df)
-        resultado_acumulado = df["resultado_real"].fillna(0).sum()
-
+        total_ops = len(df)
+        resultado_acum = df["resultado_real"].fillna(0).sum()
         encerradas = df[df["status_operacao"].astype(str).isin(["Encerrada", "Gain", "Stopada"])]
-        ganhadoras = encerradas[encerradas["resultado_real"] > 0]
-        taxa_acerto = 0.0
-        if len(encerradas) > 0:
-            taxa_acerto = round((len(ganhadoras) / len(encerradas)) * 100, 2)
+        taxa_acerto = round((len(encerradas[encerradas["resultado_real"] > 0]) / len(encerradas)) * 100, 2) if len(encerradas) > 0 else 0
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total de operações", total_operacoes)
-        c2.metric("Resultado acumulado", f"{resultado_acumulado:.2f}")
+        c1.metric("Total operações", total_ops)
+        c2.metric("Resultado acumulado", f"{resultado_acum:.2f}")
         c3.metric("Taxa de acerto", f"{taxa_acerto}%")
-        c4.metric("Média das oportunidades", f"{df['media_final'].mean():.2f}" if not df["media_final"].dropna().empty else "-")
+        c4.metric("Média oportunidades", f"{df['media_final'].mean():.2f}" if not df["media_final"].dropna().empty else "-")
 
         st.subheader("Filtros")
-
-        ativos = ["Todos"] + sorted([str(x) for x in df["ativo"].dropna().unique().tolist() if str(x).strip()])
-        decisoes = ["Todas"] + sorted([str(x) for x in df["decisao"].dropna().unique().tolist() if str(x).strip()])
-        status_lista = ["Todos"] + sorted([str(x) for x in df["status_operacao"].dropna().unique().tolist() if str(x).strip()])
+        ativos_f = ["Todos"] + sorted([str(x) for x in df["ativo"].dropna().unique() if str(x).strip()])
+        decisoes_f = ["Todas"] + sorted([str(x) for x in df["decisao"].dropna().unique() if str(x).strip()])
+        status_f = ["Todos"] + sorted([str(x) for x in df["status_operacao"].dropna().unique() if str(x).strip()])
 
         f1, f2, f3 = st.columns(3)
-        with f1:
-            ativo_filtro = st.selectbox("Filtrar por ativo", ativos)
-        with f2:
-            decisao_filtro = st.selectbox("Filtrar por decisão", decisoes)
-        with f3:
-            status_filtro = st.selectbox("Filtrar por status", status_lista)
+        with f1: ativo_filtro = st.selectbox("Ativo", ativos_f)
+        with f2: decisao_filtro = st.selectbox("Decisão", decisoes_f)
+        with f3: status_filtro = st.selectbox("Status", status_f)
 
-        df_filtrado = df.copy()
+        df_f = df.copy()
+        if ativo_filtro != "Todos": df_f = df_f[df_f["ativo"].astype(str) == ativo_filtro]
+        if decisao_filtro != "Todas": df_f = df_f[df_f["decisao"].astype(str) == decisao_filtro]
+        if status_filtro != "Todos": df_f = df_f[df_f["status_operacao"].astype(str) == status_filtro]
 
-        if ativo_filtro != "Todos":
-            df_filtrado = df_filtrado[df_filtrado["ativo"].astype(str) == ativo_filtro]
-
-        if decisao_filtro != "Todas":
-            df_filtrado = df_filtrado[df_filtrado["decisao"].astype(str) == decisao_filtro]
-
-        if status_filtro != "Todos":
-            df_filtrado = df_filtrado[df_filtrado["status_operacao"].astype(str) == status_filtro]
-
-        st.subheader("Tabela do histórico")
-        st.dataframe(df_filtrado, use_container_width=True)
-
-        excel_bytes = dataframe_para_excel_bytes(df_filtrado)
-        st.download_button(
-            label="Baixar histórico em Excel",
-            data=excel_bytes,
-            file_name="historico_analises.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        st.dataframe(df_f, use_container_width=True)
+        st.download_button("Baixar Excel", dataframe_para_excel_bytes(df_f), "historico.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         st.subheader("P&L por ativo")
-        pnl_ativo = df.groupby("ativo", dropna=False)["resultado_real"].sum().reset_index()
-        pnl_ativo.columns = ["Ativo", "Resultado real"]
-
-        graf_pnl = alt.Chart(pnl_ativo).mark_bar().encode(
-            x=alt.X("Ativo:N", sort="-y"),
-            y=alt.Y("Resultado real:Q"),
-            color=alt.condition(
-                alt.datum["Resultado real"] >= 0,
-                alt.value("#16a34a"),
-                alt.value("#dc2626")
-            ),
-            tooltip=["Ativo", alt.Tooltip("Resultado real:Q", format=".2f")]
-        ).properties(height=320)
-
+        pnl = df.groupby("ativo", dropna=False)["resultado_real"].sum().reset_index()
+        pnl.columns = ["Ativo", "Resultado"]
+        graf_pnl = alt.Chart(pnl).mark_bar().encode(
+            x=alt.X("Ativo:N", sort="-y"), y="Resultado:Q",
+            color=alt.condition(alt.datum.Resultado >= 0, alt.value("#16a34a"), alt.value("#dc2626")),
+            tooltip=["Ativo", alt.Tooltip("Resultado:Q", format=".2f")]
+        ).properties(height=300)
         st.altair_chart(graf_pnl, use_container_width=True)
 
-        st.subheader("Distribuição por status")
-        resumo_status = df["status_operacao"].value_counts().reset_index()
-        resumo_status.columns = ["Status", "Quantidade"]
-
-        graf_status = alt.Chart(resumo_status).mark_bar().encode(
-            x=alt.X("Status:N", sort="-y"),
-            y=alt.Y("Quantidade:Q"),
-            tooltip=["Status", "Quantidade"]
-        ).properties(height=320)
-
-        st.altair_chart(graf_status, use_container_width=True)
-
-        st.subheader("Editar registro do histórico")
-
-        opcoes_registro = [
-            f"{idx} | {str(df_filtrado.iloc[idx]['data'])} | {str(df_filtrado.iloc[idx]['ativo'])} | {str(df_filtrado.iloc[idx]['tipo'])}"
-            for idx in range(len(df_filtrado))
-        ]
-
-        if opcoes_registro:
-            registro_escolhido = st.selectbox("Escolha um registro para editar", opcoes_registro)
-
-            idx_local = int(registro_escolhido.split(" | ")[0])
-            idx_real = df_filtrado.index[idx_local]
-
-            observacao_atual = str(df.loc[idx_real, "observacao_pos_operacao"]) if "observacao_pos_operacao" in df.columns else ""
-            resultado_atual = pd.to_numeric(df.loc[idx_real, "resultado_real"], errors="coerce") if "resultado_real" in df.columns else 0.0
-            status_atual = str(df.loc[idx_real, "status_operacao"]) if "status_operacao" in df.columns else "Aberta"
-            data_saida_atual = str(df.loc[idx_real, "data_saida"]) if "data_saida" in df.columns else ""
-
-            if pd.isna(resultado_atual):
-                resultado_atual = 0.0
-
-            novo_status = st.selectbox(
-                "Editar status da operação",
-                ["Aberta", "Encerrada", "Stopada", "Gain"],
-                index=["Aberta", "Encerrada", "Stopada", "Gain"].index(status_atual) if status_atual in ["Aberta", "Encerrada", "Stopada", "Gain"] else 0
-            )
-
-            nova_data_saida = st.text_input(
-                "Editar data de saída",
-                value=data_saida_atual
-            )
-
-            nova_observacao = st.text_area(
-                "Editar observação pós-operação",
-                value=observacao_atual,
-                height=100
-            )
-
-            novo_resultado = st.number_input(
-                "Editar resultado real",
-                value=float(resultado_atual),
-                format="%.2f"
-            )
-
-            if st.button("Salvar edição do registro"):
-                df.loc[idx_real, "status_operacao"] = novo_status
-                df.loc[idx_real, "data_saida"] = nova_data_saida
-                df.loc[idx_real, "observacao_pos_operacao"] = nova_observacao
-                df.loc[idx_real, "resultado_real"] = novo_resultado
+        st.subheader("Editar registro")
+        opcoes_reg = [f"{i} | {df_f.iloc[i]['data']} | {df_f.iloc[i]['ativo']} | {df_f.iloc[i]['tipo']}" for i in range(len(df_f))]
+        if opcoes_reg:
+            reg = st.selectbox("Registro", opcoes_reg)
+            idx_l = int(reg.split(" | ")[0])
+            idx_r = df_f.index[idx_l]
+            novo_status = st.selectbox("Status", ["Aberta", "Encerrada", "Stopada", "Gain"],
+                index=["Aberta", "Encerrada", "Stopada", "Gain"].index(str(df.loc[idx_r, "status_operacao"])) if str(df.loc[idx_r, "status_operacao"]) in ["Aberta", "Encerrada", "Stopada", "Gain"] else 0, key="edit_status")
+            nova_obs = st.text_area("Observação", value=str(df.loc[idx_r, "observacao_pos_operacao"]), key="edit_obs")
+            novo_res = st.number_input("Resultado real", value=float(pd.to_numeric(df.loc[idx_r, "resultado_real"], errors="coerce") or 0), format="%.2f", key="edit_res")
+            if st.button("Salvar edição"):
+                df.loc[idx_r, "status_operacao"] = novo_status
+                df.loc[idx_r, "observacao_pos_operacao"] = nova_obs
+                df.loc[idx_r, "resultado_real"] = novo_res
                 salvar_historico_df(df)
-                st.success("Registro atualizado com sucesso. Recarregue a página para ver os dados atualizados.")
-        else:
-            st.info("Nenhum registro disponível para edição com os filtros atuais.")
+                st.success("Registro atualizado.")
 
+# =============================================
+# TAB 3 — OPÇÕES AO VIVO
+# =============================================
 with tab3:
     st.title("Opções ao vivo — OpLab")
-    st.caption("Consulte todas as opções disponíveis para qualquer ativo da B3 em tempo real")
+    st.caption("Consulte todas as opções de qualquer ativo em tempo real com todos os dados da API")
 
-    ticker_vivo = st.text_input("Digite o ticker", placeholder="Ex: PETR4, VALE3, BBAS3", key="ticker_vivo")
-    buscar_vivo = st.button("Buscar opções", key="btn_vivo")
+    ticker_vivo = st.text_input("Ticker", placeholder="Ex: PETR4, VALE3", key="ticker_vivo")
+    buscar_vivo = st.button("Buscar", key="btn_vivo")
 
     if buscar_vivo and ticker_vivo:
-        with st.spinner("Buscando dados na OpLab..."):
-            info_ativo = oplab_buscar_ativo(ticker_vivo)
-            opcoes_vivo = oplab_buscar_opcoes(ticker_vivo)
+        with st.spinner("Buscando..."):
+            info = get_ativo(ticker_vivo)
+            opcoes_v = get_opcoes(ticker_vivo)
 
-        if info_ativo:
-            st.subheader(f"{ticker_vivo.upper()} — Dados do ativo")
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Preço atual", f"R$ {info_ativo['close']:.2f}")
-            m2.metric("Variação", f"{info_ativo.get('variation', 0):.2f}%")
-            m3.metric("Vol. implícita", f"{info_ativo.get('iv_current', 0):.2f}%")
-            m4.metric("Volume", f"{info_ativo.get('volume', 0):,}")
-            m5.metric("Setor", info_ativo.get("sector", "-"))
+        if info:
+            st.subheader(f"{ticker_vivo.upper()} — Dados completos do ativo")
 
-            if opcoes_vivo:
-                opcoes_validas = [
-                    o for o in opcoes_vivo
-                    if o.get("days_to_maturity", 0) > 0
-                ]
+            # MOSTRAR TODOS OS DADOS DO ATIVO
+            dados_exibir = {
+                "Preço atual": f"R$ {info.get('close', 0):.2f}",
+                "Abertura": f"R$ {info.get('open', 0):.2f}",
+                "Máxima": f"R$ {info.get('high', 0):.2f}",
+                "Mínima": f"R$ {info.get('low', 0):.2f}",
+                "Variação": f"{info.get('variation', 0):.2f}%",
+                "Volume": f"{info.get('volume', 0):,}",
+                "Volume financeiro": f"R$ {info.get('financial_volume', 0):,.0f}",
+                "Bid": f"R$ {info.get('bid', 0):.2f}",
+                "Ask": f"R$ {info.get('ask', 0):.2f}",
+                "Vol. implícita atual": f"{info.get('iv_current', 0):.2f}%",
+                "IV 1y máx": f"{info.get('iv_1y_max', 0):.2f}%",
+                "IV 1y mín": f"{info.get('iv_1y_min', 0):.2f}%",
+                "IV 1y percentil": f"{info.get('iv_1y_percentile', 0):.2f}%",
+                "IV 1y rank": f"{info.get('iv_1y_rank', 0):.2f}%",
+                "IV 6m máx": f"{info.get('iv_6m_max', 0):.2f}%",
+                "IV 6m mín": f"{info.get('iv_6m_min', 0):.2f}%",
+                "EWMA atual": f"{info.get('ewma_current', 0):.2f}%",
+                "EWMA 1y máx": f"{info.get('ewma_1y_max', 0):.2f}%",
+                "EWMA 1y mín": f"{info.get('ewma_1y_min', 0):.2f}%",
+                "GARCH(1,1) 1y": f"{info.get('garch11_1y', 0):.2f}%",
+                "Desvio padrão 1y": f"{info.get('stdv_1y', 0):.6f}",
+                "Desvio padrão 5d": f"{info.get('stdv_5d', 0):.6f}",
+                "Beta IBOV": f"{info.get('beta_ibov', 0):.4f}",
+                "Correlação IBOV": f"{info.get('correl_ibov', 0):.4f}",
+                "Semi-retorno 1y": f"{info.get('semi_return_1y', 0):.4f}",
+                "Entropia": f"{info.get('entropy', 0):.4f}",
+                "Tendência curto prazo": info.get("short_term_trend", ""),
+                "Tendência médio prazo": info.get("middle_term_trend", ""),
+                "Setor": info.get("sector", ""),
+                "ISIN": info.get("isin", ""),
+                "CNPJ": info.get("cnpj", ""),
+                "OpLab Score": str(info.get("oplab_score", {}).get("value", "")),
+                "Tem opções": str(info.get("has_options", "")),
+                "Market maker": str(info.get("market_maker", "")),
+                "Ranking vol. opções": str(info.get("highest_options_volume_rank", "")),
+            }
 
-                if opcoes_validas:
-                    df_opcoes = pd.DataFrame([
-                        {
-                            "Símbolo": o["symbol"],
-                            "Tipo": o.get("category", o.get("type", "")),
-                            "Strike": o.get("strike", 0),
-                            "Vencimento": o.get("due_date", ""),
-                            "Dias": o.get("days_to_maturity", 0),
-                            "Bid": o.get("bid", 0),
-                            "Ask": o.get("ask", 0),
-                            "Último": o.get("close", 0),
-                            "Volume": o.get("volume", 0),
-                            "Liquidez": classificar_liquidez_volume(o.get("volume", 0)),
-                        }
-                        for o in opcoes_validas
-                    ])
+            df_dados = pd.DataFrame(list(dados_exibir.items()), columns=["Campo", "Valor"])
+            st.dataframe(df_dados, use_container_width=True, hide_index=True)
 
-                    st.subheader("Filtros")
-                    fc1, fc2 = st.columns(2)
+            if opcoes_v:
+                opcoes_ativas = [o for o in opcoes_v if o.get("days_to_maturity", 0) > 0]
+
+                if opcoes_ativas:
+                    df_op = pd.DataFrame([{
+                        "Símbolo": o["symbol"],
+                        "Nome": o.get("name", ""),
+                        "Tipo": o.get("category", o.get("type", "")),
+                        "Exercício": o.get("maturity_type", ""),
+                        "Strike": o.get("strike", 0),
+                        "Spot": o.get("spot_price", 0),
+                        "Vencimento": o.get("due_date", ""),
+                        "Dias": o.get("days_to_maturity", 0),
+                        "Bid": o.get("bid", 0),
+                        "Ask": o.get("ask", 0),
+                        "Último": o.get("close", 0),
+                        "Abertura": o.get("open", 0),
+                        "Máxima": o.get("high", 0),
+                        "Mínima": o.get("low", 0),
+                        "Volume": o.get("volume", 0),
+                        "Vol. financeiro": o.get("financial_volume", 0),
+                        "Variação %": o.get("variation", 0),
+                        "Lote": o.get("contract_size", 100),
+                        "Market maker": o.get("market_maker", False),
+                        "Bid vol": o.get("bid_volume", 0),
+                        "Ask vol": o.get("ask_volume", 0),
+                        "ISIN": o.get("isin", ""),
+                        "Liquidez": classificar_liquidez_volume(o.get("volume", 0)),
+                    } for o in opcoes_ativas])
+
+                    st.subheader(f"{len(df_op)} opções ativas")
+
+                    fc1, fc2, fc3 = st.columns(3)
                     with fc1:
-                        filtro_tipo = st.selectbox("Tipo", ["Todos", "CALL", "PUT"], key="filtro_tipo_vivo")
+                        ft = st.selectbox("Tipo", ["Todos", "CALL", "PUT"], key="ft_vivo")
                     with fc2:
-                        vencimentos = ["Todos"] + sorted(df_opcoes["Vencimento"].unique().tolist())
-                        filtro_venc = st.selectbox("Vencimento", vencimentos, key="filtro_venc_vivo")
+                        vencs = ["Todos"] + sorted(df_op["Vencimento"].unique().tolist())
+                        fv = st.selectbox("Vencimento", vencs, key="fv_vivo")
+                    with fc3:
+                        min_dias = st.number_input("Dias mínimos", min_value=0, value=0, key="fd_vivo")
 
-                    df_exibir = df_opcoes.copy()
-                    if filtro_tipo != "Todos":
-                        df_exibir = df_exibir[df_exibir["Tipo"] == filtro_tipo]
-                    if filtro_venc != "Todos":
-                        df_exibir = df_exibir[df_exibir["Vencimento"] == filtro_venc]
+                    df_show = df_op.copy()
+                    if ft != "Todos": df_show = df_show[df_show["Tipo"] == ft]
+                    if fv != "Todos": df_show = df_show[df_show["Vencimento"] == fv]
+                    if min_dias > 0: df_show = df_show[df_show["Dias"] >= min_dias]
 
-                    st.subheader(f"{len(df_exibir)} opções encontradas")
-                    st.dataframe(
-                        df_exibir.sort_values(["Tipo", "Vencimento", "Strike"]).reset_index(drop=True),
-                        use_container_width=True
-                    )
-
-                    st.subheader("Distribuição de strikes")
-                    for tipo_graf in ["CALL", "PUT"]:
-                        df_tipo = df_exibir[df_exibir["Tipo"] == tipo_graf]
-                        if not df_tipo.empty:
-                            graf = alt.Chart(df_tipo).mark_bar().encode(
-                                x=alt.X("Strike:Q", title="Strike"),
-                                y=alt.Y("Volume:Q", title="Volume"),
-                                color=alt.value("#16a34a" if tipo_graf == "CALL" else "#dc2626"),
-                                tooltip=["Símbolo", "Strike", "Volume", "Bid", "Ask", "Dias"]
-                            ).properties(height=280, title=f"{tipo_graf}s — Volume por strike")
-                            st.altair_chart(graf, use_container_width=True)
-                else:
-                    st.warning("Nenhuma opção ativa encontrada para este ativo.")
-            else:
-                st.warning("Não foi possível carregar as opções.")
+                    st.dataframe(df_show.sort_values(["Tipo", "Vencimento", "Strike"]).reset_index(drop=True), use_container_width=True)
+                    st.download_button("Baixar Excel", dataframe_para_excel_bytes(df_show), f"opcoes_{ticker_vivo}.xlsx", key="dl_opcoes_vivo")
         else:
-            st.error(f"Ativo '{ticker_vivo}' não encontrado na OpLab.")
+            st.error("Ativo não encontrado.")
+
+# =============================================
+# TAB 4 — SCANNER DE OPORTUNIDADES
+# =============================================
+with tab4:
+    st.title("Scanner de oportunidades")
+    st.caption("Busca automática de opções descorrelacionadas com os modelos de precificação")
+
+    st.subheader("Configuração do scanner")
+    sc1, sc2, sc3 = st.columns(3)
+    with sc1:
+        scan_tickers = st.text_input("Ativos (separar por vírgula, vazio = todos)", placeholder="PETR4, VALE3, BBAS3", key="scan_tickers")
+    with sc2:
+        scan_dias_min = st.number_input("Dias mínimos até vencimento", min_value=1, value=180, key="scan_dias")
+    with sc3:
+        scan_liq_min = st.number_input("Liquidez mínima (R$/dia)", min_value=0.0, value=1000.0, key="scan_liq")
+
+    sc4, sc5 = st.columns(2)
+    with sc4:
+        scan_top = st.number_input("Top N resultados", min_value=1, value=50, key="scan_top")
+    with sc5:
+        st.write("")
+        st.write("")
+        scan_btn = st.button("Escanear mercado", key="scan_btn")
+
+    if scan_btn:
+        tickers_list = None
+        if scan_tickers.strip():
+            tickers_list = [t.strip().upper() for t in scan_tickers.split(",") if t.strip()]
+
+        with st.spinner("Escaneando... isso pode levar alguns minutos dependendo da quantidade de ativos."):
+            df_scan = escanear_mercado(tickers=tickers_list, dias_min=scan_dias_min, liquidez_min=scan_liq_min, top_n=scan_top)
+
+        if df_scan.empty:
+            st.warning("Nenhuma oportunidade encontrada com os filtros atuais.")
+        else:
+            st.session_state["scan_resultado"] = df_scan
+            st.success(f"{len(df_scan)} oportunidades encontradas!")
+
+    df_scan = st.session_state.get("scan_resultado", pd.DataFrame())
+
+    if not df_scan.empty:
+        st.subheader("Resultados do scanner")
+
+        # Métricas gerais
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Oportunidades", len(df_scan))
+        m2.metric("Distorção média", f"{df_scan['distorcao_media_pct'].mean():.2f}%")
+        m3.metric("Maior distorção", f"{df_scan['distorcao_media_pct'].max():.2f}%")
+        m4.metric("Ativos únicos", df_scan["ativo"].nunique())
+
+        # Tabela principal
+        colunas_exibir = [
+            "ativo", "simbolo", "tipo", "strike", "spot", "vencimento", "dias_vencimento",
+            "preco_mercado", "bid", "ask", "volume", "volume_financeiro",
+            "bs_preco", "binomial_preco", "monte_carlo_preco", "media_modelos",
+            "distorcao_bs_pct", "distorcao_binomial_pct", "distorcao_mc_pct", "distorcao_media_pct",
+            "iv_ativo_pct", "tipo_exercicio", "market_maker", "setor"
+        ]
+        colunas_disponiveis = [c for c in colunas_exibir if c in df_scan.columns]
+        st.dataframe(df_scan[colunas_disponiveis], use_container_width=True)
+        st.download_button("Baixar resultados (Excel)", dataframe_para_excel_bytes(df_scan), "scanner_resultados.xlsx", key="dl_scanner")
+
+        # Gráfico de distorção
+        st.subheader("Top 20 — Distorção por opção")
+        top20 = df_scan.head(20)
+        graf_dist = alt.Chart(top20).mark_bar().encode(
+            x=alt.X("distorcao_media_pct:Q", title="Distorção média (%)"),
+            y=alt.Y("simbolo:N", sort="-x", title=""),
+            color=alt.condition(alt.datum.distorcao_media_pct >= 20, alt.value("#16a34a"), alt.value("#f59e0b")),
+            tooltip=["simbolo", "ativo", "tipo", alt.Tooltip("distorcao_media_pct:Q", format=".2f"), alt.Tooltip("preco_mercado:Q", format=".2f"), alt.Tooltip("media_modelos:Q", format=".4f")]
+        ).properties(height=500)
+        st.altair_chart(graf_dist, use_container_width=True)
+
+        # Selecionar para backtest
+        st.subheader("Selecionar para backtest")
+        n_bt = st.number_input("Quantas opções para backtest?", min_value=1, max_value=len(df_scan), value=min(10, len(df_scan)), key="n_bt")
+        if st.button("Adicionar ao backtest", key="btn_add_bt"):
+            selecionadas = selecionar_backtest(df_scan, n=n_bt)
+            carteira = adicionar_ao_backtest(selecionadas)
+            st.success(f"{len(selecionadas)} opções adicionadas ao backtest! Total na carteira: {len(carteira)}")
+
+# =============================================
+# TAB 5 — BACKTEST
+# =============================================
+with tab5:
+    st.title("Backtest — Acompanhamento de opções")
+    st.caption("Acompanhe a variação das opções selecionadas e valide a estratégia")
+
+    carteira = carregar_carteira()
+    ativos_bt = [c for c in carteira if c["status"] == "ativo"]
+
+    st.metric("Opções ativas no backtest", len(ativos_bt))
+
+    if ativos_bt:
+        if st.button("Atualizar preços agora", key="btn_atualizar_bt"):
+            with st.spinner("Atualizando preços..."):
+                df_att = atualizar_backtest()
+            if not df_att.empty:
+                st.success(f"{len(df_att)} opções atualizadas!")
+            else:
+                st.warning("Não foi possível atualizar.")
+
+        # Carteira atual
+        st.subheader("Carteira do backtest")
+        df_cart = pd.DataFrame(ativos_bt)
+        st.dataframe(df_cart, use_container_width=True)
+
+        # Histórico
+        df_hist = carregar_historico_backtest()
+        if not df_hist.empty:
+            st.subheader("Histórico de acompanhamento")
+            st.dataframe(df_hist.tail(50), use_container_width=True)
+
+            # Gráfico de variação
+            df_hist["variacao_pct"] = pd.to_numeric(df_hist["variacao_pct"], errors="coerce")
+            if "data" in df_hist.columns:
+                graf_var = alt.Chart(df_hist).mark_line(point=True).encode(
+                    x=alt.X("data:N", title="Data"),
+                    y=alt.Y("variacao_pct:Q", title="Variação (%)"),
+                    color="simbolo:N",
+                    tooltip=["simbolo", "ativo", alt.Tooltip("variacao_pct:Q", format=".2f"), alt.Tooltip("preco_atual:Q", format=".2f")]
+                ).properties(height=400)
+                st.altair_chart(graf_var, use_container_width=True)
+
+            st.download_button("Baixar histórico backtest", dataframe_para_excel_bytes(df_hist), "backtest_historico.xlsx", key="dl_bt")
+
+        # Remover do backtest
+        st.subheader("Gerenciar carteira")
+        simbolos_bt = [c["simbolo"] for c in ativos_bt]
+        remover = st.selectbox("Remover opção", simbolos_bt, key="sel_remover_bt")
+        if st.button("Remover do backtest", key="btn_remover_bt"):
+            carteira = [c for c in carregar_carteira() if not (c["simbolo"] == remover and c["status"] == "ativo")]
+            salvar_carteira(carteira)
+            st.success(f"{remover} removido do backtest.")
+            st.rerun()
+    else:
+        st.info("Nenhuma opção no backtest. Vá ao Scanner e adicione opções.")
+
+# =============================================
+# TAB 6 — TELEGRAM
+# =============================================
+with tab6:
+    st.title("Bot Telegram — Relatórios diários")
+    st.caption("Configure o bot para enviar relatórios automáticos")
+
+    st.subheader("Configuração")
+    st.markdown("""
+    **Como configurar:**
+    1. Abra o Telegram e fale com [@BotFather](https://t.me/BotFather)
+    2. Envie `/newbot` e siga as instruções para criar um bot
+    3. Copie o **token** do bot
+    4. Fale com [@userinfobot](https://t.me/userinfobot) para descobrir seu **Chat ID**
+    5. Cole os dados abaixo
+    """)
+
+    tg_token = st.text_input("Token do bot", type="password", key="tg_token")
+    tg_chat_id = st.text_input("Chat ID", key="tg_chat_id")
+    tg_tickers = st.text_input("Ativos para monitorar (separar por vírgula)", placeholder="PETR4, VALE3, BBAS3", key="tg_tickers")
+
+    col_tg1, col_tg2 = st.columns(2)
+
+    with col_tg1:
+        if st.button("Enviar relatório agora", key="btn_tg_enviar"):
+            if not tg_token or not tg_chat_id:
+                st.error("Configure o token e chat ID primeiro.")
+            else:
+                tickers = [t.strip().upper() for t in tg_tickers.split(",") if t.strip()] if tg_tickers else None
+                with st.spinner("Gerando e enviando relatório..."):
+                    from telegram_bot import gerar_relatorio_scanner
+                    relatorio = gerar_relatorio_scanner(tickers=tickers)
+                    ok = enviar_mensagem(relatorio, chat_id=tg_chat_id, token=tg_token)
+
+                    relatorio_bt = gerar_relatorio_backtest()
+                    ok2 = enviar_mensagem(relatorio_bt, chat_id=tg_chat_id, token=tg_token)
+
+                if ok:
+                    st.success("Relatório enviado com sucesso!")
+                else:
+                    st.error("Erro ao enviar. Verifique token e chat ID.")
+
+    with col_tg2:
+        if st.button("Testar conexão", key="btn_tg_teste"):
+            if not tg_token or not tg_chat_id:
+                st.error("Configure o token e chat ID.")
+            else:
+                ok = enviar_mensagem("✅ Bot conectado ao Sistema de Análise de Opções!", chat_id=tg_chat_id, token=tg_token)
+                if ok:
+                    st.success("Teste OK! Mensagem enviada.")
+                else:
+                    st.error("Falha no teste.")
+
+    st.divider()
+    st.subheader("Prévia do relatório")
+    if st.button("Gerar prévia", key="btn_tg_previa"):
+        relatorio_bt = gerar_relatorio_backtest()
+        st.code(relatorio_bt)
