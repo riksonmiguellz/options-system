@@ -1,0 +1,9 @@
+{
+  "name": "miguel-command-center",
+  "version": 2,
+  "buildCommand": null,
+  "outputDirectory": ".",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
