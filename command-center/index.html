@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIGUEL - Command Center</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap');
+
+        :root {
+            --cyan: #00f0ff;
+            --cyan-dim: #00f0ff33;
+            --green: #00ff88;
+            --red: #ff3366;
+            --orange: #ffaa00;
+            --bg: #0a0e17;
+            --panel: #0d1220;
+            --border: #1a2744;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: var(--bg);
+            color: #e0e8f0;
+            font-family: 'Share Tech Mono', monospace;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Scanline effect */
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(
+                0deg, transparent, transparent 2px,
+                rgba(0, 240, 255, 0.015) 2px, rgba(0, 240, 255, 0.015) 4px
+            );
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border);
+            background: linear-gradient(180deg, #0f1628, var(--bg));
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .robot-avatar {
+            width: 56px;
+            height: 56px;
+            position: relative;
+        }
+
+        .robot-head {
+            width: 48px;
+            height: 40px;
+            background: linear-gradient(135deg, #1a2744, #0d1a30);
+            border: 2px solid var(--cyan);
+            border-radius: 8px 8px 4px 4px;
+            position: relative;
+            margin: 8px auto 0;
+            box-shadow: 0 0 15px var(--cyan-dim), inset 0 0 10px rgba(0,240,255,0.05);
+        }
+
+        .robot-eye {
+            width: 10px;
+            height: 10px;
+            background: var(--cyan);
+            border-radius: 50%;
+            position: absolute;
+            top: 12px;
+            animation: blink 3s infinite;
+            box-shadow: 0 0 8px var(--cyan);
+        }
+
+        .robot-eye.left { left: 10px; }
+        .robot-eye.right { right: 10px; }
+
+        .robot-mouth {
+            width: 16px;
+            height: 3px;
+            background: var(--green);
+            position: absolute;
+            bottom: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-radius: 2px;
+            box-shadow: 0 0 6px var(--green);
+        }
+
+        .robot-antenna {
+            width: 2px;
+            height: 10px;
+            background: var(--cyan);
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        .robot-antenna::after {
+            content: '';
+            width: 6px;
+            height: 6px;
+            background: var(--cyan);
+            border-radius: 50%;
+            position: absolute;
+            top: -4px;
+            left: -2px;
+            animation: pulse-glow 2s infinite;
+        }
+
+        @keyframes blink {
+            0%, 90%, 100% { opacity: 1; }
+            95% { opacity: 0.1; }
+        }
+
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 4px var(--cyan); opacity: 1; }
+            50% { box-shadow: 0 0 12px var(--cyan); opacity: 0.7; }
+        }
+
+        .title-block h1 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 22px;
+            font-weight: 900;
+            color: var(--cyan);
+            letter-spacing: 4px;
+            text-shadow: 0 0 20px var(--cyan-dim);
+        }
+
+        .title-block p {
+            font-size: 11px;
+            color: #5a7090;
+            letter-spacing: 2px;
+            margin-top: 2px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            font-size: 12px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--green);
+            border-radius: 50%;
+            display: inline-block;
+            animation: pulse-glow 2s infinite;
+            box-shadow: 0 0 6px var(--green);
+        }
+
+        .clock {
+            font-family: 'Orbitron', sans-serif;
+            color: var(--cyan);
+            font-size: 14px;
+        }
+
+        /* Main Grid */
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-rows: auto auto auto;
+            gap: 16px;
+            padding: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .panel::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+            opacity: 0.5;
+        }
+
+        .panel-title {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 11px;
+            color: var(--cyan);
+            letter-spacing: 2px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .panel-title .icon {
+            font-size: 14px;
+        }
+
+        /* Robot Display Panel */
+        .robot-display {
+            grid-column: 1;
+            grid-row: 1 / 3;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 360px;
+        }
+
+        .big-robot {
+            position: relative;
+            width: 180px;
+            height: 220px;
+        }
+
+        .big-robot .br-antenna {
+            width: 3px;
+            height: 20px;
+            background: var(--cyan);
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        .big-robot .br-antenna::after {
+            content: '';
+            width: 12px;
+            height: 12px;
+            background: var(--cyan);
+            border-radius: 50%;
+            position: absolute;
+            top: -8px;
+            left: -4.5px;
+            animation: pulse-glow 1.5s infinite;
+        }
+
+        .big-robot .br-head {
+            width: 120px;
+            height: 90px;
+            background: linear-gradient(180deg, #1a2744, #0d1a30);
+            border: 2px solid var(--cyan);
+            border-radius: 16px 16px 8px 8px;
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            box-shadow: 0 0 30px var(--cyan-dim);
+        }
+
+        .big-robot .br-eye {
+            width: 20px;
+            height: 20px;
+            background: var(--cyan);
+            border-radius: 50%;
+            position: absolute;
+            top: 25px;
+            animation: blink 4s infinite;
+            box-shadow: 0 0 15px var(--cyan);
+        }
+
+        .big-robot .br-eye.left { left: 22px; }
+        .big-robot .br-eye.right { right: 22px; }
+
+        .big-robot .br-visor {
+            position: absolute;
+            bottom: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 50px;
+            height: 8px;
+            display: flex;
+            gap: 3px;
+        }
+
+        .big-robot .br-visor span {
+            flex: 1;
+            background: var(--green);
+            border-radius: 2px;
+            animation: visor-bar 1.5s infinite;
+            box-shadow: 0 0 4px var(--green);
+        }
+
+        .big-robot .br-visor span:nth-child(2) { animation-delay: 0.2s; }
+        .big-robot .br-visor span:nth-child(3) { animation-delay: 0.4s; }
+        .big-robot .br-visor span:nth-child(4) { animation-delay: 0.6s; }
+        .big-robot .br-visor span:nth-child(5) { animation-delay: 0.8s; }
+
+        @keyframes visor-bar {
+            0%, 100% { opacity: 0.3; height: 4px; }
+            50% { opacity: 1; height: 8px; }
+        }
+
+        .big-robot .br-body {
+            width: 100px;
+            height: 80px;
+            background: linear-gradient(180deg, #1a2744, #0f1628);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            position: absolute;
+            top: 115px;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        .big-robot .br-body .core {
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--cyan);
+            border-radius: 50%;
+            position: absolute;
+            top: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            animation: core-spin 3s linear infinite;
+        }
+
+        .big-robot .br-body .core::after {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--cyan);
+            border-radius: 50%;
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            box-shadow: 0 0 10px var(--cyan);
+        }
+
+        @keyframes core-spin {
+            from { transform: translateX(-50%) rotate(0deg); }
+            to { transform: translateX(-50%) rotate(360deg); }
+        }
+
+        .big-robot .br-body .data-lines {
+            position: absolute;
+            bottom: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 4px;
+        }
+
+        .big-robot .br-body .data-lines span {
+            width: 12px;
+            height: 2px;
+            background: var(--green);
+            opacity: 0.5;
+            border-radius: 1px;
+        }
+
+        .big-robot .br-arm {
+            width: 12px;
+            height: 60px;
+            background: linear-gradient(180deg, #1a2744, #0d1220);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            position: absolute;
+            top: 120px;
+        }
+
+        .big-robot .br-arm.left { left: 18px; }
+        .big-robot .br-arm.right { right: 18px; }
+
+        .robot-name {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 24px;
+            font-weight: 900;
+            color: var(--cyan);
+            margin-top: 16px;
+            letter-spacing: 6px;
+            text-shadow: 0 0 20px var(--cyan-dim);
+        }
+
+        .robot-subtitle {
+            font-size: 11px;
+            color: #5a7090;
+            letter-spacing: 3px;
+            margin-top: 4px;
+        }
+
+        /* Agent Cards */
+        .agent-card {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            background: rgba(0, 240, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .agent-card:hover {
+            border-color: var(--cyan);
+            background: rgba(0, 240, 255, 0.06);
+            transform: translateX(4px);
+        }
+
+        .agent-icon {
+            width: 36px;
+            height: 36px;
+            border: 1px solid var(--cyan);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            background: rgba(0, 240, 255, 0.05);
+        }
+
+        .agent-info h3 {
+            font-size: 13px;
+            color: #c0d0e0;
+            font-weight: normal;
+        }
+
+        .agent-info p {
+            font-size: 10px;
+            color: #5a7090;
+            margin-top: 2px;
+        }
+
+        .agent-status {
+            margin-left: auto;
+            font-size: 10px;
+            color: var(--green);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* Terminal */
+        .terminal {
+            grid-column: 2 / 4;
+            min-height: 200px;
+        }
+
+        .terminal-body {
+            background: #080c14;
+            border-radius: 4px;
+            padding: 12px;
+            height: 200px;
+            overflow-y: auto;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+
+        .terminal-body::-webkit-scrollbar { width: 4px; }
+        .terminal-body::-webkit-scrollbar-track { background: transparent; }
+        .terminal-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+        .log-line { opacity: 0.8; }
+        .log-line .time { color: #5a7090; }
+        .log-line .sys { color: var(--cyan); }
+        .log-line .ok { color: var(--green); }
+        .log-line .warn { color: var(--orange); }
+        .log-line .err { color: var(--red); }
+
+        .terminal-input {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+            padding: 8px 12px;
+            background: #080c14;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+        }
+
+        .terminal-input span { color: var(--green); font-size: 13px; }
+
+        .terminal-input input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: #e0e8f0;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 13px;
+            outline: none;
+        }
+
+        /* Stats */
+        .stat-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .stat-box {
+            background: rgba(0, 240, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .stat-box .value {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--cyan);
+        }
+
+        .stat-box .label {
+            font-size: 9px;
+            color: #5a7090;
+            letter-spacing: 1px;
+            margin-top: 4px;
+        }
+
+        /* Metrics bars */
+        .metric {
+            margin-bottom: 10px;
+        }
+
+        .metric-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+
+        .metric-header .label { color: #8090a0; }
+        .metric-header .val { color: var(--cyan); }
+
+        .metric-bar {
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .metric-bar .fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 1s ease;
+        }
+
+        .fill-cyan { background: var(--cyan); box-shadow: 0 0 6px var(--cyan-dim); }
+        .fill-green { background: var(--green); box-shadow: 0 0 6px rgba(0,255,136,0.3); }
+        .fill-orange { background: var(--orange); box-shadow: 0 0 6px rgba(255,170,0,0.3); }
+
+        /* Activity feed */
+        .activity-item {
+            display: flex;
+            gap: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #111827;
+            font-size: 11px;
+        }
+
+        .activity-item:last-child { border: none; }
+
+        .activity-time {
+            color: #5a7090;
+            white-space: nowrap;
+            min-width: 45px;
+        }
+
+        .activity-text { color: #a0b0c0; }
+
+        /* Quick actions */
+        .action-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            padding: 10px 14px;
+            background: rgba(0, 240, 255, 0.04);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: #c0d0e0;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-bottom: 6px;
+        }
+
+        .action-btn:hover {
+            border-color: var(--cyan);
+            background: rgba(0, 240, 255, 0.08);
+            color: var(--cyan);
+        }
+
+        .action-btn .key {
+            margin-left: auto;
+            font-size: 10px;
+            color: #5a7090;
+            background: #111827;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+            .robot-display { grid-column: 1; grid-row: auto; }
+            .terminal { grid-column: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <div class="robot-avatar">
+                <div class="robot-antenna"></div>
+                <div class="robot-head">
+                    <div class="robot-eye left"></div>
+                    <div class="robot-eye right"></div>
+                    <div class="robot-mouth"></div>
+                </div>
+            </div>
+            <div class="title-block">
+                <h1>MIGUEL</h1>
+                <p>COMMAND CENTER v2.0</p>
+            </div>
+        </div>
+        <div class="header-right">
+            <span><span class="status-dot"></span> ONLINE</span>
+            <span class="clock" id="clock">--:--:--</span>
+        </div>
+    </div>
+
+    <div class="dashboard">
+        <!-- Robot Display -->
+        <div class="panel robot-display">
+            <div class="big-robot">
+                <div class="br-antenna"></div>
+                <div class="br-head">
+                    <div class="br-eye left"></div>
+                    <div class="br-eye right"></div>
+                    <div class="br-visor">
+                        <span></span><span></span><span></span><span></span><span></span>
+                    </div>
+                </div>
+                <div class="br-body">
+                    <div class="core"></div>
+                    <div class="data-lines">
+                        <span></span><span></span><span></span><span></span><span></span>
+                    </div>
+                </div>
+                <div class="br-arm left"></div>
+                <div class="br-arm right"></div>
+            </div>
+            <div class="robot-name">MIGUEL</div>
+            <div class="robot-subtitle">AI OPERATIONS CORE</div>
+        </div>
+
+        <!-- Agents Panel -->
+        <div class="panel">
+            <div class="panel-title"><span class="icon">&#9881;</span> AGENTES ATIVOS</div>
+            <div class="agent-card" onclick="sendCommand('agent:coding')">
+                <div class="agent-icon">&#128187;</div>
+                <div class="agent-info">
+                    <h3>Coding Assistant</h3>
+                    <p>claude-sonnet-4-6 &bull; agent_toolset</p>
+                </div>
+                <div class="agent-status"><span class="status-dot"></span> READY</div>
+            </div>
+            <div class="agent-card" onclick="sendCommand('agent:researcher')">
+                <div class="agent-icon">&#128270;</div>
+                <div class="agent-info">
+                    <h3>Web Researcher</h3>
+                    <p>claude-sonnet-4-6 &bull; web_search</p>
+                </div>
+                <div class="agent-status"><span class="status-dot"></span> READY</div>
+            </div>
+            <div class="agent-card" onclick="sendCommand('agent:options')">
+                <div class="agent-icon">&#128200;</div>
+                <div class="agent-info">
+                    <h3>Options Scanner</h3>
+                    <p>streamlit &bull; oplab_api</p>
+                </div>
+                <div class="agent-status"><span class="status-dot"></span> READY</div>
+            </div>
+            <div class="agent-card" onclick="sendCommand('agent:telegram')">
+                <div class="agent-icon">&#128172;</div>
+                <div class="agent-info">
+                    <h3>Telegram Bot</h3>
+                    <p>alertas &bull; relatorios</p>
+                </div>
+                <div class="agent-status"><span class="status-dot"></span> READY</div>
+            </div>
+        </div>
+
+        <!-- System Stats -->
+        <div class="panel">
+            <div class="panel-title"><span class="icon">&#9889;</span> SISTEMA</div>
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="value" id="sessions">0</div>
+                    <div class="label">SESSIONS</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" id="queries">0</div>
+                    <div class="label">QUERIES</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" id="uptime">99.9%</div>
+                    <div class="label">UPTIME</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" id="tokens">0</div>
+                    <div class="label">TOKENS (K)</div>
+                </div>
+            </div>
+            <div style="margin-top: 14px;">
+                <div class="metric">
+                    <div class="metric-header">
+                        <span class="label">CPU USAGE</span>
+                        <span class="val" id="cpu-val">24%</span>
+                    </div>
+                    <div class="metric-bar"><div class="fill fill-cyan" id="cpu-bar" style="width: 24%"></div></div>
+                </div>
+                <div class="metric">
+                    <div class="metric-header">
+                        <span class="label">MEMORY</span>
+                        <span class="val" id="mem-val">58%</span>
+                    </div>
+                    <div class="metric-bar"><div class="fill fill-green" id="mem-bar" style="width: 58%"></div></div>
+                </div>
+                <div class="metric">
+                    <div class="metric-header">
+                        <span class="label">API RATE</span>
+                        <span class="val" id="api-val">32%</span>
+                    </div>
+                    <div class="metric-bar"><div class="fill fill-orange" id="api-bar" style="width: 32%"></div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Terminal -->
+        <div class="panel terminal">
+            <div class="panel-title"><span class="icon">&#9002;</span> TERMINAL</div>
+            <div class="terminal-body" id="terminal"></div>
+            <div class="terminal-input">
+                <span>&gt;_</span>
+                <input type="text" id="cmd-input" placeholder="digite um comando..." onkeydown="handleCmd(event)">
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="panel">
+            <div class="panel-title"><span class="icon">&#9733;</span> ACOES RAPIDAS</div>
+            <button class="action-btn" onclick="sendCommand('scan')">
+                &#128270; Escanear Mercado <span class="key">F1</span>
+            </button>
+            <button class="action-btn" onclick="sendCommand('research')">
+                &#127760; Pesquisa Web <span class="key">F2</span>
+            </button>
+            <button class="action-btn" onclick="sendCommand('backtest')">
+                &#128200; Rodar Backtest <span class="key">F3</span>
+            </button>
+            <button class="action-btn" onclick="sendCommand('report')">
+                &#128203; Gerar Relatorio <span class="key">F4</span>
+            </button>
+            <button class="action-btn" onclick="sendCommand('telegram')">
+                &#128172; Enviar Telegram <span class="key">F5</span>
+            </button>
+            <button class="action-btn" onclick="sendCommand('status')">
+                &#9889; Status Geral <span class="key">F6</span>
+            </button>
+        </div>
+
+        <!-- Activity Feed -->
+        <div class="panel">
+            <div class="panel-title"><span class="icon">&#128340;</span> ATIVIDADE RECENTE</div>
+            <div id="activity-feed">
+                <div class="activity-item">
+                    <span class="activity-time">agora</span>
+                    <span class="activity-text"><span class="ok">SYSTEM</span> Command Center inicializado</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Clock
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('clock').textContent = now.toLocaleTimeString('pt-BR', { hour12: false });
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // Terminal
+        const terminal = document.getElementById('terminal');
+        const bootMessages = [
+            { text: '[SYS] Inicializando MIGUEL Command Center...', cls: 'sys' },
+            { text: '[OK ] Nucleo de IA carregado', cls: 'ok' },
+            { text: '[OK ] Agente: Coding Assistant ............ ONLINE', cls: 'ok' },
+            { text: '[OK ] Agente: Web Researcher .............. ONLINE', cls: 'ok' },
+            { text: '[OK ] Agente: Options Scanner ............. ONLINE', cls: 'ok' },
+            { text: '[OK ] Agente: Telegram Bot ................ ONLINE', cls: 'ok' },
+            { text: '[OK ] Conexao OpLab API ................... OK', cls: 'ok' },
+            { text: '[OK ] Conexao Anthropic API ............... OK', cls: 'ok' },
+            { text: '[SYS] Todos os sistemas operacionais.', cls: 'sys' },
+            { text: '[SYS] Aguardando comandos, Miguel.', cls: 'sys' },
+        ];
+
+        function log(text, cls = '') {
+            const time = new Date().toLocaleTimeString('pt-BR', { hour12: false });
+            const line = document.createElement('div');
+            line.className = 'log-line';
+            line.innerHTML = `<span class="time">${time}</span> <span class="${cls}">${text}</span>`;
+            terminal.appendChild(line);
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+
+        let bootIdx = 0;
+        function bootSequence() {
+            if (bootIdx < bootMessages.length) {
+                log(bootMessages[bootIdx].text, bootMessages[bootIdx].cls);
+                bootIdx++;
+                setTimeout(bootSequence, 200 + Math.random() * 300);
+            }
+        }
+        setTimeout(bootSequence, 500);
+
+        // Commands
+        const commands = {
+            help: () => {
+                log('Comandos disponiveis:', 'sys');
+                log('  scan     - Escanear mercado de opcoes', 'sys');
+                log('  research - Iniciar pesquisa web', 'sys');
+                log('  backtest - Executar backtest', 'sys');
+                log('  report   - Gerar relatorio', 'sys');
+                log('  telegram - Enviar alerta Telegram', 'sys');
+                log('  status   - Status dos agentes', 'sys');
+                log('  clear    - Limpar terminal', 'sys');
+            },
+            scan: () => {
+                log('[CMD] Iniciando escaneamento do mercado...', 'warn');
+                addActivity('Scanner de mercado ativado');
+                incrementStat('queries');
+                setTimeout(() => log('[OK ] Escaneamento concluido - 47 opcoes analisadas', 'ok'), 2000);
+            },
+            research: () => {
+                log('[CMD] Web Researcher ativado...', 'warn');
+                addActivity('Pesquisa web iniciada');
+                incrementStat('sessions');
+                setTimeout(() => log('[OK ] Agente de pesquisa pronto para consultas', 'ok'), 1500);
+            },
+            backtest: () => {
+                log('[CMD] Executando backtest da carteira...', 'warn');
+                addActivity('Backtest em execucao');
+                incrementStat('queries');
+                setTimeout(() => log('[OK ] Backtest concluido - 12 posicoes atualizadas', 'ok'), 3000);
+            },
+            report: () => {
+                log('[CMD] Gerando relatorio consolidado...', 'warn');
+                addActivity('Relatorio gerado');
+                incrementStat('queries');
+                setTimeout(() => log('[OK ] Relatorio exportado com sucesso', 'ok'), 2500);
+            },
+            telegram: () => {
+                log('[CMD] Enviando resumo via Telegram...', 'warn');
+                addActivity('Alerta Telegram enviado');
+                setTimeout(() => log('[OK ] Mensagem enviada com sucesso', 'ok'), 1000);
+            },
+            status: () => {
+                log('[SYS] === STATUS DOS AGENTES ===', 'sys');
+                log('  Coding Assistant ... ONLINE (idle)', 'ok');
+                log('  Web Researcher .... ONLINE (idle)', 'ok');
+                log('  Options Scanner ... ONLINE (idle)', 'ok');
+                log('  Telegram Bot ...... ONLINE (standby)', 'ok');
+                log('[SYS] Todos operacionais.', 'sys');
+            },
+            clear: () => { terminal.innerHTML = ''; },
+        };
+
+        function sendCommand(cmd) {
+            const c = cmd.replace('agent:', '').toLowerCase();
+            log(`> ${cmd}`, 'ok');
+            if (commands[c]) {
+                commands[c]();
+            } else if (cmd.startsWith('agent:')) {
+                log(`[CMD] Conectando ao agente ${c}...`, 'warn');
+                addActivity(`Agente ${c} ativado`);
+                incrementStat('sessions');
+                setTimeout(() => log(`[OK ] Agente ${c} pronto para instrucoes`, 'ok'), 1200);
+            } else {
+                log(`[MIGUEL] Processando: "${cmd}"...`, 'sys');
+                addActivity(`Comando: ${cmd}`);
+                incrementStat('queries');
+                setTimeout(() => log('[OK ] Comando executado.', 'ok'), 1500);
+            }
+        }
+
+        function handleCmd(e) {
+            if (e.key === 'Enter') {
+                const input = e.target;
+                const cmd = input.value.trim();
+                if (cmd) {
+                    sendCommand(cmd);
+                    input.value = '';
+                }
+            }
+        }
+
+        // Activity feed
+        function addActivity(text) {
+            const feed = document.getElementById('activity-feed');
+            const now = new Date();
+            const time = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+            const item = document.createElement('div');
+            item.className = 'activity-item';
+            item.innerHTML = `<span class="activity-time">${time}</span><span class="activity-text">${text}</span>`;
+            feed.insertBefore(item, feed.firstChild);
+            if (feed.children.length > 8) feed.removeChild(feed.lastChild);
+        }
+
+        // Stats
+        let stats = { sessions: 0, queries: 0, tokens: 0 };
+        function incrementStat(key) {
+            stats[key]++;
+            document.getElementById(key).textContent = stats[key];
+            stats.tokens += Math.floor(Math.random() * 50 + 10);
+            document.getElementById('tokens').textContent = stats.tokens;
+        }
+
+        // Live metrics
+        function updateMetrics() {
+            const cpu = 15 + Math.random() * 30;
+            const mem = 50 + Math.random() * 20;
+            const api = 20 + Math.random() * 40;
+
+            document.getElementById('cpu-val').textContent = Math.round(cpu) + '%';
+            document.getElementById('cpu-bar').style.width = cpu + '%';
+            document.getElementById('mem-val').textContent = Math.round(mem) + '%';
+            document.getElementById('mem-bar').style.width = mem + '%';
+            document.getElementById('api-val').textContent = Math.round(api) + '%';
+            document.getElementById('api-bar').style.width = api + '%';
+        }
+        setInterval(updateMetrics, 3000);
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT') return;
+            const map = { F1: 'scan', F2: 'research', F3: 'backtest', F4: 'report', F5: 'telegram', F6: 'status' };
+            if (map[e.key]) { e.preventDefault(); sendCommand(map[e.key]); }
+        });
+    </script>
+</body>
+</html>
