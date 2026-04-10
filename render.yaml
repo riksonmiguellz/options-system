@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: options-system
+    runtime: docker
+    repo: https://github.com/riksonmiguellz/options-system
+    branch: master
+    plan: free
+    envVars:
+      - key: APP_USER
+        value: admin
+      - key: APP_PASS
+        value: admin123
