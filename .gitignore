@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.xlsx
+*.bat
+.streamlit/secrets.toml
+backtest_carteira.json
+backtest_historico.csv
+trades_log.csv
+output_*.md
+output_*.txt
+.claude/
